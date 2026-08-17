@@ -20,11 +20,13 @@ class GroupePage extends StatefulWidget {
 }
 
 class _GroupePageState extends State<GroupePage> {
+  final Set<int> commentairesAimes = {};
   bool estMembre = false;
   String roleUtilisateur = "membre";
   bool chargementRole = true;
   String nomUtilisateurConnecte = "";
   bool estAdmin = false;
+
 
 
   @override
@@ -72,6 +74,36 @@ class _GroupePageState extends State<GroupePage> {
 
     print("RÔLE DE L'UTILISATEUR : $roleUtilisateur");
   }
+
+  Future<void> chargerCommentairesAimes(
+      List<Commentaire> commentaires,
+      ) async {
+    final utilisateurId = DatabaseHelper.utilisateurConnecteId;
+
+    if (utilisateurId == null) {
+      return;
+    }
+    commentairesAimes.clear();
+
+    for (final commentaire in commentaires) {
+      if (commentaire.id == null) {
+        continue;
+      }
+
+      final aime = await DatabaseHelper().aDejaAimeCommentaire(
+        commentaire.id!,
+        utilisateurId,
+      );
+
+      if (aime) {
+        commentairesAimes.add(commentaire.id!);
+      }
+    }
+
+    setState(() {});
+  }
+
+
   Widget construireCommentaire({
     required Commentaire commentaire,
     required List<Commentaire> commentaires,
@@ -79,6 +111,8 @@ class _GroupePageState extends State<GroupePage> {
     required DatabaseHelper db,
     required int niveau,
   }) {
+
+
     final reponses = getReponses(
       commentaires,
       commentaire.id!,
@@ -169,6 +203,77 @@ class _GroupePageState extends State<GroupePage> {
 
                       Row(
                         children: [
+
+                          IconButton(
+                            icon: Icon(
+                              commentairesAimes.contains(commentaire.id)
+                                  ? Icons.favorite
+                                  : Icons.favorite_border,
+                              color: commentairesAimes.contains(commentaire.id)
+                                  ? Colors.red
+                                  : Colors.grey.shade600,
+                              size: 20,
+                            ),
+                            onPressed: () async {
+                              final commentaireId = commentaire.id!;
+                              final utilisateurId = DatabaseHelper.utilisateurConnecteId;
+                              print("ID UTILISATEUR POUR LIKE : $utilisateurId");
+
+                              if (utilisateurId == null) {
+                                return;
+                              }
+
+
+                              final dejaAime = commentairesAimes.contains(commentaireId);
+
+                              print("Commentaire ID : $commentaireId");
+                              print("Déjà aimé : $dejaAime");
+
+
+                              if (dejaAime) {
+                                await db.retirerLikeCommentaire(
+                                  commentaireId,
+                                  utilisateurId,
+                                );
+
+                                final totalLikes = await db.getNombreLikesCommentaire(
+                                  commentaireId,
+                                );
+                                print("TOTAL À AFFICHER : $totalLikes");
+
+                                setState(() {
+                                  commentairesAimes.remove(commentaireId);
+                                  commentaire.nombreLikes = totalLikes;
+                                });
+                              } else {
+                                await db.ajouterLikeCommentaire(
+                                  commentaireId,
+                                  utilisateurId,
+                                );
+                                final totalLikes = await db.getNombreLikesCommentaire(
+                                  commentaireId,
+                                );
+
+                                setState(() {
+                                  commentairesAimes.add(commentaireId);
+                                  commentaire.nombreLikes = totalLikes;
+                                });
+                              }
+                            },
+                          ),
+
+                          Text(
+                            "${commentaire.nombreLikes} ",
+                            style: const TextStyle(
+                              fontSize: 14,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+
+
+
+
+
                           TextButton(
                             onPressed: () {
                               final controller = TextEditingController();
@@ -458,6 +563,7 @@ class _GroupePageState extends State<GroupePage> {
     final commentaires = await db.getCommentaires(
       publication.id!,
     );
+    await chargerCommentairesAimes(commentaires);
 
     final commentairesPrincipaux = commentaires
         .where((commentaire) => commentaire.parentId == null)
@@ -791,8 +897,7 @@ class _GroupePageState extends State<GroupePage> {
             if (estMembre)
               ElevatedButton.icon(
                 onPressed: () {
-                  final controller = TextEditingController();
-                  File? imageChoisie;
+                  final controller = TextEditingController();List<File> imagesChoisies = [];
 
                   showDialog(
                     context: context,
@@ -834,23 +939,22 @@ class _GroupePageState extends State<GroupePage> {
                                       ),
 
                                     const SizedBox(height: 10),
-
                                     ElevatedButton.icon(
                                       onPressed: () async {
                                         final picker = ImagePicker();
 
-                                        final image = await picker.pickImage(
-                                          source: ImageSource.gallery,
-                                        );
+                                        final images = await picker.pickMultiImage();
 
-                                        if (image != null) {
+                                        if (images.isNotEmpty) {
                                           setDialogState(() {
-                                            imageChoisie = File(image.path);
+                                            imagesChoisies = images
+                                                .map((image) => File(image.path))
+                                                .toList();
                                           });
                                         }
                                       },
                                       icon: const Icon(Icons.image),
-                                      label: const Text("Choisir une image"),
+                                      label: const Text("Choisir des photos"),
                                     ),
                                   ],
                                 ),
@@ -869,7 +973,7 @@ class _GroupePageState extends State<GroupePage> {
                                 onPressed: () async {
                                   final texte = controller.text.trim();
 
-                                  if (texte.isEmpty && imageChoisie == null) {
+                                  if (texte.isEmpty && imagesChoisies.isEmpty ) {
                                     ScaffoldMessenger.of(context).showSnackBar(
                                       const SnackBar(
                                         content: Text(
@@ -892,7 +996,7 @@ class _GroupePageState extends State<GroupePage> {
                                     nombreLikes: 0,
                                     nombreCommentaires: 0,
                                     aime: false,
-                                    image: imageChoisie?.path,
+                                    images: imagesChoisies.map((image) => image.path).toList(),
                                   );
 
                                   final publicationId =
@@ -910,7 +1014,7 @@ class _GroupePageState extends State<GroupePage> {
                                     nombreCommentaires:
                                     publication.nombreCommentaires,
                                     aime: publication.aime,
-                                    image: publication.image,
+                                    images: publication.images,
                                   );
 
                                   setState(() {
@@ -985,15 +1089,26 @@ class _GroupePageState extends State<GroupePage> {
                       Text(publication.contenuMessage),
 
                       const SizedBox(height: 12),
-                      if (publication.image != null &&
-                          publication.image!.isNotEmpty)
-                        ClipRRect(
-                          borderRadius: BorderRadius.circular(10),
-                          child: Image.file(
-                            File(publication.image!),
-                            width: double.infinity,
-                            height: 200,
-                            fit: BoxFit.cover,
+                      if (publication.images.isNotEmpty)
+                        SizedBox(
+                          height: 200,
+                          child: ListView.builder(
+                            scrollDirection: Axis.horizontal,
+                            itemCount: publication.images.length,
+                            itemBuilder: (context, imageIndex) {
+                              return Padding(
+                                padding: const EdgeInsets.only(right: 8),
+                                child: ClipRRect(
+                                  borderRadius: BorderRadius.circular(10),
+                                  child: Image.file(
+                                    File(publication.images[imageIndex]),
+                                    width: 250,
+                                    height: 200,
+                                    fit: BoxFit.cover,
+                                  ),
+                                ),
+                              );
+                            },
                           ),
                         ),
                       const SizedBox(height: 12),

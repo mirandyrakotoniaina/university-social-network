@@ -28,7 +28,7 @@ import '../models/utilisateurs.dart';
 
       return await openDatabase(
         cheminComplet,
-        version: 13,
+        version: 16,
         onCreate: (db, version) async {
 // Nos tables seront créées ici
           await db.execute('''
@@ -63,9 +63,18 @@ import '../models/utilisateurs.dart';
         auteur TEXT NOT NULL,
         dateCommentaire TEXT NOT NULL,
         publication_id INTEGER NOT NULL,
-        parent_id INTEGER
+        parent_id INTEGER,
+        nombreLikes INTEGER NOT NULL DEFAULT 0
       )
     ''');
+
+          await db.execute('''
+  CREATE TABLE likes_commentaires (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    commentaire_id INTEGER NOT NULL,
+    utilisateur_id INTEGER NOT NULL
+  )
+''');
 // Table des membres
           await db.execute('''
       CREATE TABLE membres_groupes (
@@ -162,6 +171,33 @@ import '../models/utilisateurs.dart';
     SET statut = 'accepte'
   ''');
           }
+
+          if (oldVersion < 14) {
+            await db.execute('''
+    ALTER TABLE commentaires
+    ADD COLUMN nombreLikes INTEGER NOT NULL DEFAULT 0
+  ''');
+          }
+
+          if (oldVersion < 15) {
+            await db.execute('''
+    CREATE TABLE likes_commentaires (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      commentaire_id INTEGER NOT NULL,
+      utilisateur_id INTEGER NOT NULL
+    )
+  ''');
+          }
+
+          if (oldVersion < 16) {
+            await db.execute('''
+    CREATE TABLE publication_images (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      publication_id INTEGER NOT NULL,
+      image TEXT NOT NULL
+    )
+  ''');
+          }
         },
       );
     }
@@ -202,26 +238,45 @@ import '../models/utilisateurs.dart';
     }
 
 
-  Future<int> insertPublication(
-      Publication publication,
-      int groupeId,
-      ) async {
-    final db = await database;
+    Future<int> insertPublication(
+        Publication publication,
+        int groupeId,
+        ) async {
+      final db = await database;
 
-    return await db.insert(
-      'publications',
-      {
-        'contenuMessage': publication.contenuMessage,
-        'auteur': publication.auteur,
-        'datePublication': publication.datePublication.toIso8601String(),
-        'nombreLikes': publication.nombreLikes,
-        'nombreCommentaires': publication.nombreCommentaires,
-        'aime': publication.aime ? 1 : 0,
-        'image': publication.image,
-        'groupe_id': groupeId,
-      },
-    );
-  }
+      // 1. Création de la publication
+      final publicationId = await db.insert(
+        'publications',
+        {
+          'contenuMessage': publication.contenuMessage,
+          'auteur': publication.auteur,
+          'datePublication': publication.datePublication.toIso8601String(),
+          'nombreLikes': publication.nombreLikes,
+          'nombreCommentaires': publication.nombreCommentaires,
+          'aime': publication.aime ? 1 : 0,
+
+          // Ancienne colonne conservée pour compatibilité
+          'image': publication.images.isNotEmpty
+              ? publication.images.first
+              : null,
+
+          'groupe_id': groupeId,
+        },
+      );
+
+      // 2. Enregistrement de toutes les photos
+      for (final image in publication.images) {
+        await db.insert(
+          'publication_images',
+          {
+            'publication_id': publicationId,
+            'image': image,
+          },
+        );
+      }
+
+      return publicationId;
+    }
   Future<List<Groupe>> getGroupes() async {
     final db = await database;
 
@@ -269,30 +324,56 @@ import '../models/utilisateurs.dart';
 
 
 
-  Future<List<Publication>> getPublications(int groupeId) async {
-    final db = await database;
+    Future<List<Publication>> getPublications(int groupeId) async {
+      final db = await database;
 
-    final resultats = await db.query(
-      'publications',
-      where: 'groupe_id = ?',
-      whereArgs: [groupeId],
-    );
-
-    return resultats.map((map) {
-      return Publication(
-        id: map['id'] as int,
-        contenuMessage: map['contenuMessage'] as String,
-        auteur: map['auteur'] as String,
-        datePublication: DateTime.parse(
-          map['datePublication'] as String,
-        ),
-        nombreLikes: map['nombreLikes'] as int,
-        nombreCommentaires: map['nombreCommentaires'] as int,
-        aime: (map['aime'] as int) == 1,
-        image: map['image'] as String?,
+      final resultats = await db.query(
+        'publications',
+        where: 'groupe_id = ?',
+        whereArgs: [groupeId],
       );
-    }).toList();
-  }
+
+      List<Publication> publications = [];
+
+      for (final map in resultats) {
+        final publicationId = map['id'] as int;
+
+        // Récupérer toutes les photos de la publication
+        final resultatsImages = await db.query(
+          'publication_images',
+          where: 'publication_id = ?',
+          whereArgs: [publicationId],
+          orderBy: 'id ASC',
+        );
+
+        List<String> images = resultatsImages
+            .map((image) => image['image'] as String)
+            .toList();
+
+        // Compatibilité avec les anciennes publications
+        // qui utilisent encore la colonne "image"
+        if (images.isEmpty && map['image'] != null) {
+          images = [map['image'] as String];
+        }
+
+        publications.add(
+          Publication(
+            id: publicationId,
+            contenuMessage: map['contenuMessage'] as String,
+            auteur: map['auteur'] as String,
+            datePublication: DateTime.parse(
+              map['datePublication'] as String,
+            ),
+            nombreLikes: map['nombreLikes'] as int,
+            nombreCommentaires: map['nombreCommentaires'] as int,
+            aime: (map['aime'] as int) == 1,
+            images: images,
+          ),
+        );
+      }
+
+      return publications;
+    }
 
   Future<List<Map<String, dynamic>>> testPublications() async {
     final db = await database;
@@ -362,6 +443,7 @@ import '../models/utilisateurs.dart';
           commentaire.dateCommentaire.toIso8601String(),
           'publication_id': commentaire.publicationId,
           'parent_id': commentaire.parentId,
+          'nombreLikes': commentaire.nombreLikes,
         },
       );
     }
@@ -386,9 +468,124 @@ import '../models/utilisateurs.dart';
           ),
           publicationId: map['publication_id'] as int,
           parentId: map['parent_id'] as int?,
+          nombreLikes: map['nombreLikes'] as int? ?? 0,
         );
       }).toList();
     }
+
+
+    Future<void> modifierLikeCommentaire(
+        int commentaireId,
+        bool aime,
+        ) async {
+      final db = await database;
+
+      await db.rawUpdate(
+        '''
+    UPDATE commentaires
+    SET nombreLikes = nombreLikes ${aime ? '+' : '-'} 1
+    WHERE id = ?
+    ''',
+        [commentaireId],
+      );
+    }
+
+
+    Future<bool> aDejaAimeCommentaire(
+        int commentaireId,
+        int utilisateurId,
+        ) async {
+      final db = await database;
+
+      final resultat = await db.query(
+        'likes_commentaires',
+        where: 'commentaire_id = ? AND utilisateur_id = ?',
+        whereArgs: [
+          commentaireId,
+          utilisateurId,
+        ],
+        limit: 1,
+      );
+
+      return resultat.isNotEmpty;
+    }
+
+    Future<void> ajouterLikeCommentaire(
+        int commentaireId,
+        int utilisateurId,
+        ) async {
+      final db = await database;
+
+      await db.insert(
+        'likes_commentaires',
+        {
+          'commentaire_id': commentaireId,
+          'utilisateur_id': utilisateurId,
+        },
+      );
+      print(
+        "LIKE AJOUTÉ : commentaire=$commentaireId utilisateur=$utilisateurId",
+      );
+
+      await db.rawUpdate(
+        '''
+    UPDATE commentaires
+    SET nombreLikes = nombreLikes + 1
+    WHERE id = ?
+    ''',
+        [commentaireId],
+      );
+    }
+
+    Future<void> retirerLikeCommentaire(
+        int commentaireId,
+        int utilisateurId,
+        ) async {
+      final db = await database;
+
+      await db.delete(
+        'likes_commentaires',
+        where: 'commentaire_id = ? AND utilisateur_id = ?',
+        whereArgs: [commentaireId, utilisateurId],
+      );
+
+      await db.rawUpdate(
+        '''
+    UPDATE commentaires
+    SET nombreLikes = CASE
+      WHEN nombreLikes > 0 THEN nombreLikes - 1
+      ELSE 0
+    END
+    WHERE id = ?
+    ''',
+        [commentaireId],
+      );
+    }
+
+    Future<int> getNombreLikesCommentaire(int commentaireId) async {
+      final db = await database;
+
+      final resultat = await db.rawQuery(
+        '''
+    SELECT COUNT(*) AS total
+    FROM likes_commentaires
+    WHERE commentaire_id = ?
+    ''',
+        [commentaireId],
+      );
+      print(
+        "TOTAL LIKES COMMENTAIRE $commentaireId = ${resultat.first['total']}",
+      );
+
+      return (resultat.first['total'] as int?) ?? 0;
+    }
+
+
+
+
+
+
+
     Future<void> supprimerPublication(int publicationId) async {
       final db = await database;
 
@@ -904,6 +1101,7 @@ import '../models/utilisateurs.dart';
           nom: map['nom'] as String,
           email: map['email'] as String,
         );
+        utilisateurConnecteId = utilisateur.id;
 
         print("UTILISATEUR ACTUEL : id=${utilisateur.id}, nom=${utilisateur.nom}");
 
@@ -917,6 +1115,7 @@ import '../models/utilisateurs.dart';
           'email': 'mirandy@gmail.com',
         },
       );
+      utilisateurConnecteId = id;
 
       print("NOUVEL UTILISATEUR CRÉÉ : id=$id");
 

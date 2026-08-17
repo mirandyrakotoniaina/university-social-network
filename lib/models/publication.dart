@@ -6,7 +6,7 @@ class Publication {
   int nombreLikes;
   int nombreCommentaires;
   bool aime;
-  String? image;
+  List<String> images;
 
   Publication({
     this.id,
@@ -16,6 +16,6 @@ class Publication {
     required this.nombreLikes,
     required this.nombreCommentaires,
     this.aime = false,
-    this.image,
+    this.images = const [],
   });
 }

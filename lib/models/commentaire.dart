@@ -5,6 +5,7 @@ class Commentaire {
   final DateTime dateCommentaire;
   final int publicationId;
   final int? parentId;
+  int nombreLikes;
 
   Commentaire({
     this.id,
@@ -13,5 +14,6 @@ class Commentaire {
     required this.dateCommentaire,
     required this.publicationId,
     this.parentId,
+    this.nombreLikes = 0,
   });
 }
