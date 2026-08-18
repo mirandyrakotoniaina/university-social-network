@@ -6,7 +6,7 @@ University Social Network is a Flutter mobile application designed to manage gro
 
 The application allows students to discover groups, join communities, interact with members, and share content within their groups.
 
-Group administrators can manage groups, members, membership requests, and administrator roles.
+Group administrators can manage groups, members, membership roles, publications, and interactions within their communities.
 
 This project was developed as part of a university project based on the theme:
 
@@ -21,53 +21,76 @@ This project was developed as part of a university project based on the theme:
 * Delete a group
 * Choose the group type:
 
-    * Class
-    * Activity
-    * Club
+  * Class
+  * Activity
+  * Club
+  * Association
+  * Project
 * Add a group description and image
 * Search for groups
+* Filter groups by type
 
 ### Member Management
 
-* Request to join a group
-* Accept or reject membership requests
-* Add members directly as an administrator
-* Remove members
+* Join a group
 * View group members
 * Manage administrator and member roles
-* Transfer administrator responsibilities
+* Add members
+* Remove members
 * Leave a group
-* Prevent an administrator from leaving without transferring responsibility
+* Manage group administrator responsibilities
 
 ### Group Interaction
 
 * Create publications
-* Add images to publications
+* Add multiple images to publications
 * Like publications
 * Add comments
 * Reply to comments
+* Like comments
 * Edit and delete publications
 * Edit and delete comments
+* Display publication and comment counters
 
 ## Technologies
 
 * Flutter
 * Dart
-* SQLite
-* sqflite
 * Android Studio
+* Supabase
+* Supabase Database
+* Supabase Storage
+* SQLite / sqflite for local application data
 
 ## Database
 
-The application uses SQLite for local data storage.
+The application uses **Supabase** as the main backend database.
 
-Main tables:
+Supabase is used to store and synchronize groups, members, publications, comments, and likes.
+
+### Main tables
 
 * `groupes` — stores group information
-* `utilisateurs` — stores users
-* `membres_groupes` — manages group members, roles, and membership status
+* `utilisateurs` — stores local application users
+* `membres_groupes` — manages group members and roles
 * `publications` — stores publications
+* `publication_images` — stores publication image URLs
 * `commentaires` — stores comments and replies
+* `likes_publications` — stores publication likes
+* `likes_commentaires` — stores comment likes
+* `profiles` — stores user profiles used for Supabase references
+
+### Image Storage
+
+Publication images are stored in **Supabase Storage**.
+
+Storage bucket:
+
+```text
+publication-images
+```
+
+Images are uploaded to the `publications/` folder and their public URLs are stored in the `publication_images` table.
 
 ## Project Structure
 
@@ -108,7 +131,20 @@ Open the project with Android Studio.
 flutter pub get
 ```
 
-### 4. Run the application
+### 4. Configure Supabase
+
+The application connects to the project's Supabase backend using:
+
+* Supabase API URL
+* Supabase Publishable Key
+
+These values are required to initialize Supabase in the Flutter application.
+
+The project uses the same Supabase project for the different application modules.
+
+**Do not use or expose the Supabase Secret Key in the Flutter application or in the Git repository.**
+
+### 5. Run the application
 
 Start an Android emulator or connect an Android device, then run:
 
@@ -122,6 +158,13 @@ flutter run
 * Dart SDK
 * Android Studio
 * Android device or emulator
+* Supabase project
+
+## Backend
+
+The backend is shared between the different modules of the application.
+
+The group management module and the news feed module can use the same Supabase project and database.
 
 ## Author
 
@@ -132,3 +175,5 @@ M1 Student — Data Engineering
 ## Project Status
 
 The project is functional and focuses on group and community management within a university social network.
+
+The main group, publication, comment, like, and image storage features are currently connected to Supabase.

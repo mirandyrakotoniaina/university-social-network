@@ -4,7 +4,9 @@ import 'package:path/path.dart';
 import '../models/publication.dart';
 import '../models/commentaire.dart';
 import '../models/groupe.dart';
+import 'dart:io';
 import '../models/utilisateurs.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
   class DatabaseHelper {
     static Database? _database;
     static int? utilisateurConnecteId;
@@ -204,35 +206,42 @@ import '../models/utilisateurs.dart';
 
 
 
-
     Future<int> insertGroupe(Groupe groupe) async {
-      final db = await database;
+      final supabase = Supabase.instance.client;
 
-      // 1. Créer le groupe
-      final groupeId = await db.insert(
-        'groupes',
-        {
-          'nom': groupe.nom,
-          'description': groupe.description,
-          'nombreMembres': groupe.nombreMembres,
-          'image': groupe.image,
-          'type': groupe.type,
-        },
-      );
-
-      // 2. Récupérer l'utilisateur actuel
+      // 1. Récupérer l'utilisateur actuel depuis SQLite
       final utilisateur = await getUtilisateurActuel();
 
-      // 3. Ajouter le créateur comme admin du groupe
-      await db.insert(
-        'membres_groupes',
-        {
-          'groupe_id': groupeId,
-          'utilisateur_id': utilisateur.id,
-          'role': 'admin',
-          'statut': 'accepte',
-        },
-      );
+      // 2. Trouver son profil Supabase grâce à son email
+      final profil = await supabase
+          .from('profiles')
+          .select('id')
+          .eq('email', utilisateur.email)
+          .single();
+
+      final profileId = profil['id'];
+
+      // 3. Créer le groupe
+      final result = await supabase
+          .from('groupes')
+          .insert({
+        'nom': groupe.nom,
+        'description': groupe.description,
+        'nombreMembres': groupe.nombreMembres,
+        'image': groupe.image,
+        'type': groupe.type,
+      })
+          .select('id')
+          .single();
+
+      final groupeId = result['id'] as int;
+
+      // 4. Le créateur devient automatiquement admin
+      await supabase.from('membres_groupes').insert({
+        'groupe_id': groupeId,
+        'utilisateur_id': profileId,
+        'role': 'admin',
+      });
 
       return groupeId;
     }
@@ -242,37 +251,47 @@ import '../models/utilisateurs.dart';
         Publication publication,
         int groupeId,
         ) async {
-      final db = await database;
+      final supabase = Supabase.instance.client;
 
-      // 1. Création de la publication
-      final publicationId = await db.insert(
-        'publications',
-        {
-          'contenuMessage': publication.contenuMessage,
-          'auteur': publication.auteur,
-          'datePublication': publication.datePublication.toIso8601String(),
-          'nombreLikes': publication.nombreLikes,
-          'nombreCommentaires': publication.nombreCommentaires,
-          'aime': publication.aime ? 1 : 0,
+      // Utilisateur actuel depuis ton système SQLite
+      final utilisateur = await getUtilisateurActuel();
 
-          // Ancienne colonne conservée pour compatibilité
-          'image': publication.images.isNotEmpty
-              ? publication.images.first
-              : null,
+      // Récupérer son UUID dans profiles
+      final profil = await supabase
+          .from('profiles')
+          .select('id')
+          .eq('email', utilisateur.email)
+          .single();
 
-          'groupe_id': groupeId,
-        },
-      );
+      final profilId = profil['id'];
 
-      // 2. Enregistrement de toutes les photos
+      // Créer la publication dans Supabase
+      final result = await supabase
+          .from('publications')
+          .insert({
+        'contenuMessage': publication.contenuMessage,
+        'auteur': publication.auteur,
+        'auteur_id': profilId,
+        'datePublication': publication.datePublication.toIso8601String(),
+        'nombreLikes': publication.nombreLikes,
+        'nombreCommentaires': publication.nombreCommentaires,
+        'aime': publication.aime,
+        'groupe_id': groupeId,
+        'image': publication.images.isNotEmpty
+            ? publication.images.first
+            : null,
+      })
+          .select('id')
+          .single();
+
+      final publicationId = result['id'] as int;
+
+      // Enregistrer toutes les photos dans publication_images
       for (final image in publication.images) {
-        await db.insert(
-          'publication_images',
-          {
-            'publication_id': publicationId,
-            'image': image,
-          },
-        );
+        await supabase.from('publication_images').insert({
+          'publication_id': publicationId,
+          'image': image,
+        });
       }
 
       return publicationId;
@@ -325,35 +344,51 @@ import '../models/utilisateurs.dart';
 
 
     Future<List<Publication>> getPublications(int groupeId) async {
-      final db = await database;
+      final supabase = Supabase.instance.client;
 
-      final resultats = await db.query(
-        'publications',
-        where: 'groupe_id = ?',
-        whereArgs: [groupeId],
-      );
+      final resultats = await supabase
+          .from('publications')
+          .select()
+          .eq('groupe_id', groupeId)
+          .order('id', ascending: false);
+
+      final utilisateurId = DatabaseHelper.utilisateurConnecteId;
 
       List<Publication> publications = [];
 
       for (final map in resultats) {
         final publicationId = map['id'] as int;
 
-        // Récupérer toutes les photos de la publication
-        final resultatsImages = await db.query(
-          'publication_images',
-          where: 'publication_id = ?',
-          whereArgs: [publicationId],
-          orderBy: 'id ASC',
-        );
+        // Récupérer les photos
+        final resultatsImages = await supabase
+            .from('publication_images')
+            .select('image')
+            .eq('publication_id', publicationId)
+            .order('id', ascending: true);
 
         List<String> images = resultatsImages
-            .map((image) => image['image'] as String)
+            .map<String>((image) => image['image'] as String)
             .toList();
 
-        // Compatibilité avec les anciennes publications
-        // qui utilisent encore la colonne "image"
         if (images.isEmpty && map['image'] != null) {
           images = [map['image'] as String];
+        }
+
+        // Récupérer tous les likes de cette publication
+        final likes = await supabase
+            .from('likes_publications')
+            .select('id, utilisateur_id')
+            .eq('publication_id', publicationId);
+
+        final nombreLikes = likes.length;
+
+        // Vérifier si l'utilisateur actuel a aimé
+        bool aime = false;
+
+        if (utilisateurId != null) {
+          aime = likes.any(
+                (like) => like['utilisateur_id'] == utilisateurId,
+          );
         }
 
         publications.add(
@@ -364,9 +399,9 @@ import '../models/utilisateurs.dart';
             datePublication: DateTime.parse(
               map['datePublication'] as String,
             ),
-            nombreLikes: map['nombreLikes'] as int,
+            nombreLikes: nombreLikes,
             nombreCommentaires: map['nombreCommentaires'] as int,
-            aime: (map['aime'] as int) == 1,
+            aime: aime,
             images: images,
           ),
         );
@@ -413,64 +448,147 @@ import '../models/utilisateurs.dart';
       );
     }
 
-  Future<void> updateCommentaires(
-      int publicationId,
-      int nombreCommentaires,
-      ) async {
-    final db = await database;
+    Future<void> updateCommentaires(int publicationId) async {
+      final supabase = Supabase.instance.client;
 
-    await db.update(
-      'publications',
-      {
-        'nombreCommentaires': nombreCommentaires,
-      },
-      where: 'id = ?',
-      whereArgs: [publicationId],
-    );
-  }
+      final result = await supabase
+          .from('commentaires')
+          .select('id')
+          .eq('publication_id', publicationId);
 
-    Future insertCommentaire(
+      final nombre = result.length;
+
+      await supabase
+          .from('publications')
+          .update({
+        'nombreCommentaires': nombre,
+      })
+          .eq('id', publicationId);
+
+      print("✅ Nombre de commentaires mis à jour : $nombre");
+    }
+
+
+
+    Future<String> uploadImagePublication(File image) async {
+      final supabase = Supabase.instance.client;
+
+      try {
+        final nomFichier =
+            '${DateTime.now().millisecondsSinceEpoch}_${image.path.split('/').last}';
+
+        final chemin = 'publications/$nomFichier';
+
+        print("📤 UPLOAD IMAGE : ${image.path}");
+
+        await supabase.storage
+            .from('publication-images')
+            .upload(
+          chemin,
+          image,
+          fileOptions: const FileOptions(
+            upsert: true,
+          ),
+        );
+
+        final url = supabase.storage
+            .from('publication-images')
+            .getPublicUrl(chemin);
+
+        print("✅ IMAGE UPLOADÉE : $url");
+
+        return url;
+      } catch (e) {
+        print("❌ ERREUR UPLOAD IMAGE : $e");
+        rethrow;
+      }
+    }
+
+    Future<int> getNombreCommentaires(int publicationId) async {
+      final supabase = Supabase.instance.client;
+
+      final result = await supabase
+          .from('commentaires')
+          .select('id')
+          .eq('publication_id', publicationId);
+
+      return result.length;
+    }
+
+
+    Future<int> insertCommentaire(
         Commentaire commentaire,
         ) async {
-      final db = await database;
+      final supabase = Supabase.instance.client;
 
-      return await db.insert(
-        'commentaires',
-        {
-          'texte': commentaire.texte,
-          'auteur': commentaire.auteur,
-          'dateCommentaire':
-          commentaire.dateCommentaire.toIso8601String(),
-          'publication_id': commentaire.publicationId,
-          'parent_id': commentaire.parentId,
-          'nombreLikes': commentaire.nombreLikes,
-        },
-      );
+      // Récupérer l'utilisateur actuel depuis SQLite
+      final utilisateur = await getUtilisateurActuel();
+
+      // Trouver son profil Supabase grâce à son email
+      final profil = await supabase
+          .from('profiles')
+          .select('id')
+          .eq('email', utilisateur.email)
+          .single();
+
+      final profilId = profil['id'];
+
+      // Ajouter le commentaire dans Supabase
+      final result = await supabase
+          .from('commentaires')
+          .insert({
+        'texte': commentaire.texte,
+        'auteur': commentaire.auteur,
+        'auteur_id': profilId,
+        'dateCommentaire':
+        commentaire.dateCommentaire.toIso8601String(),
+        'publication_id': commentaire.publicationId,
+        'parent_id': commentaire.parentId,
+      })
+          .select('id')
+          .single();
+
+      return result['id'] as int;
     }
 
     Future<List<Commentaire>> getCommentaires(int publicationId) async {
-      final db = await database;
+      final supabase = Supabase.instance.client;
 
-      final resultats = await db.query(
-        'commentaires',
-        where: 'publication_id = ?',
-        whereArgs: [publicationId],
-        orderBy: 'id ASC',
-      );
+      final resultats = await supabase
+          .from('commentaires')
+          .select()
+          .eq('publication_id', publicationId)
+          .order('id', ascending: true);
 
-      return resultats.map((map) {
-        return Commentaire(
-          id: map['id'] as int,
-          texte: map['texte'] as String,
-          auteur: map['auteur'] as String,
-          dateCommentaire: DateTime.parse(
-            map['dateCommentaire'] as String,
+      List<Commentaire> commentaires = [];
+
+      for (final map in resultats) {
+        final commentaireId = map['id'] as int;
+
+        // Récupérer le nombre réel de likes depuis Supabase
+        final likes = await supabase
+            .from('likes_commentaires')
+            .select('id')
+            .eq('commentaire_id', commentaireId);
+
+        final nombreLikes = likes.length;
+
+        commentaires.add(
+          Commentaire(
+            id: commentaireId,
+            texte: map['texte'] as String,
+            auteur: map['auteur'] as String,
+            dateCommentaire: DateTime.parse(
+              map['dateCommentaire'] as String,
+            ),
+            publicationId: map['publication_id'] as int,
+            parentId: map['parent_id'] as int?,
+            nombreLikes: nombreLikes,
           ),
-          publicationId: map['publication_id'] as int,
-          parentId: map['parent_id'] as int?,
-          nombreLikes: map['nombreLikes'] as int? ?? 0,
         );
-      }).toList();
+      }
+
+      return commentaires;
     }
 
 
@@ -490,50 +608,34 @@ import '../models/utilisateurs.dart';
       );
     }
 
-
     Future<bool> aDejaAimeCommentaire(
         int commentaireId,
         int utilisateurId,
         ) async {
-      final db = await database;
+      final supabase = Supabase.instance.client;
 
-      final resultat = await db.query(
-        'likes_commentaires',
-        where: 'commentaire_id = ? AND utilisateur_id = ?',
-        whereArgs: [
-          commentaireId,
-          utilisateurId,
-        ],
-        limit: 1,
-      );
+      final resultat = await supabase
+          .from('likes_commentaires')
+          .select('id')
+          .eq('commentaire_id', commentaireId)
+          .eq('utilisateur_id', utilisateurId)
+          .limit(1);
 
       return resultat.isNotEmpty;
     }
-
     Future<void> ajouterLikeCommentaire(
         int commentaireId,
         int utilisateurId,
         ) async {
-      final db = await database;
+      final supabase = Supabase.instance.client;
 
-      await db.insert(
-        'likes_commentaires',
-        {
-          'commentaire_id': commentaireId,
-          'utilisateur_id': utilisateurId,
-        },
-      );
+      await supabase.from('likes_commentaires').insert({
+        'commentaire_id': commentaireId,
+        'utilisateur_id': utilisateurId,
+      });
+
       print(
-        "LIKE AJOUTÉ : commentaire=$commentaireId utilisateur=$utilisateurId",
-      );
-
-      await db.rawUpdate(
-        '''
-    UPDATE commentaires
-    SET nombreLikes = nombreLikes + 1
-    WHERE id = ?
-    ''',
-        [commentaireId],
+        "✅ LIKE AJOUTÉ : commentaire=$commentaireId utilisateur=$utilisateurId",
       );
     }
 
@@ -541,45 +643,35 @@ import '../models/utilisateurs.dart';
         int commentaireId,
         int utilisateurId,
         ) async {
-      final db = await database;
+      final supabase = Supabase.instance.client;
 
-      await db.delete(
-        'likes_commentaires',
-        where: 'commentaire_id = ? AND utilisateur_id = ?',
-        whereArgs: [commentaireId, utilisateurId],
-      );
+      await supabase
+          .from('likes_commentaires')
+          .delete()
+          .eq('commentaire_id', commentaireId)
+          .eq('utilisateur_id', utilisateurId);
 
-      await db.rawUpdate(
-        '''
-    UPDATE commentaires
-    SET nombreLikes = CASE
-      WHEN nombreLikes > 0 THEN nombreLikes - 1
-      ELSE 0
-    END
-    WHERE id = ?
-    ''',
-        [commentaireId],
+      print(
+        "✅ LIKE RETIRÉ : commentaire=$commentaireId utilisateur=$utilisateurId",
       );
     }
 
     Future<int> getNombreLikesCommentaire(int commentaireId) async {
-      final db = await database;
+      final supabase = Supabase.instance.client;
 
-      final resultat = await db.rawQuery(
-        '''
-    SELECT COUNT(*) AS total
-    FROM likes_commentaires
-    WHERE commentaire_id = ?
-    ''',
-        [commentaireId],
-      );
+      final resultat = await supabase
+          .from('likes_commentaires')
+          .select('id')
+          .eq('commentaire_id', commentaireId);
+
+      final total = resultat.length;
+
       print(
-        "TOTAL LIKES COMMENTAIRE $commentaireId = ${resultat.first['total']}",
+        "✅ NOMBRE DE LIKES SUPABASE : commentaire=$commentaireId total=$total",
       );
 
-      return (resultat.first['total'] as int?) ?? 0;
+      return total;
     }
-
 
 
 
@@ -587,58 +679,73 @@ import '../models/utilisateurs.dart';
 
 
     Future<void> supprimerPublication(int publicationId) async {
-      final db = await database;
+      final supabase = Supabase.instance.client;
 
-      await db.delete(
-        'publications',
-        where: 'id = ?',
-        whereArgs: [publicationId],
-      );
+      // 1. Supprimer toutes les photos associées
+      await supabase
+          .from('publication_images')
+          .delete()
+          .eq('publication_id', publicationId);
+
+      // 2. Supprimer la publication
+      await supabase
+          .from('publications')
+          .delete()
+          .eq('id', publicationId);
+
+      print("✅ Publication $publicationId supprimée de Supabase");
     }
 
     Future<void> modifierPublication(
         int publicationId,
         String nouveauTexte,
         ) async {
-      final db = await database;
+      final supabase = Supabase.instance.client;
 
-      await db.update(
-        'publications',
-        {
-          'contenuMessage': nouveauTexte,
-        },
-        where: 'id = ?',
-        whereArgs: [publicationId],
-      );
+      final resultat = await supabase
+          .from('publications')
+          .update({
+        'contenuMessage': nouveauTexte,
+      })
+          .eq('id', publicationId)
+          .select('id, contenuMessage');
+
+      print("✅ Publication modifiée dans Supabase : $resultat");
     }
-
 
 
     Future<void> modifierCommentaire(
         int commentaireId,
         String nouveauTexte,
         ) async {
-      final db = await database;
+      final supabase = Supabase.instance.client;
 
-      await db.update(
-        'commentaires',
-        {
+      try {
+        final resultat = await supabase
+            .from('commentaires')
+            .update({
           'texte': nouveauTexte,
-        },
-        where: 'id = ?',
-        whereArgs: [commentaireId],
-      );
+        })
+            .eq('id', commentaireId)
+            .select('id, texte');
+
+        print("✅ RÉSULTAT MODIFICATION : $resultat");
+      } catch (e) {
+        print("❌ ERREUR MODIFICATION COMMENTAIRE : $e");
+        rethrow;
+      }
     }
 
 
     Future<void> supprimerCommentaire(int commentaireId) async {
-      final db = await database;
+      final supabase = Supabase.instance.client;
 
-      await db.delete(
-        'commentaires',
-        where: 'id = ?',
-        whereArgs: [commentaireId],
-      );
+      await supabase
+          .from('commentaires')
+          .delete()
+          .eq('id', commentaireId);
+
+      print("✅ Commentaire $commentaireId supprimé de Supabase");
     }
 
 
@@ -1420,6 +1527,65 @@ import '../models/utilisateurs.dart';
       return result.first['nom'].toString();
     }
 
+    Future<void> ajouterLikePublication(
+        int publicationId,
+        int utilisateurId,
+        ) async {
+      final supabase = Supabase.instance.client;
+
+      await supabase.from('likes_publications').insert({
+        'publication_id': publicationId,
+        'utilisateur_id': utilisateurId,
+      });
+
+      print(
+        "✅ LIKE PUBLICATION AJOUTÉ : publication=$publicationId utilisateur=$utilisateurId",
+      );
+    }
+
+    Future<void> retirerLikePublication(
+        int publicationId,
+        int utilisateurId,
+        ) async {
+      final supabase = Supabase.instance.client;
+
+      await supabase
+          .from('likes_publications')
+          .delete()
+          .eq('publication_id', publicationId)
+          .eq('utilisateur_id', utilisateurId);
+
+      print(
+        "✅ LIKE PUBLICATION RETIRÉ : publication=$publicationId utilisateur=$utilisateurId",
+      );
+    }
+
+    Future<int> getNombreLikesPublication(int publicationId) async {
+      final supabase = Supabase.instance.client;
+
+      final resultat = await supabase
+          .from('likes_publications')
+          .select('id')
+          .eq('publication_id', publicationId);
+
+      return resultat.length;
+    }
+
+    Future<bool> aDejaAimePublication(
+        int publicationId,
+        int utilisateurId,
+        ) async {
+      final supabase = Supabase.instance.client;
+
+      final resultat = await supabase
+          .from('likes_publications')
+          .select('id')
+          .eq('publication_id', publicationId)
+          .eq('utilisateur_id', utilisateurId)
+          .limit(1);
+
+      return resultat.isNotEmpty;
+    }
 
 
 
