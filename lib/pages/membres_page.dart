@@ -74,12 +74,17 @@ class _MembresPageState extends State<MembresPage> {
 
   // Ajouter un membre
   Future<void> ajouterMembre() async {
+    print("======================================");
+    print("👤 BOUTON AJOUTER MEMBRE CLIQUÉ");
     final db = DatabaseHelper();
 
-    await db.creerUtilisateursTest();
+    print("📥 Chargement des utilisateurs...");
 
     final tousLesUtilisateurs =
     await db.getTousLesUtilisateurs();
+
+    print("👥 UTILISATEURS TROUVÉS : ${tousLesUtilisateurs.length}");
+    print("👥 UTILISATEURS : $tousLesUtilisateurs");
     print("TOUS LES UTILISATEURS : $tousLesUtilisateurs");
 
     // Ne garder que les utilisateurs qui ne sont pas encore membres
@@ -138,7 +143,7 @@ class _MembresPageState extends State<MembresPage> {
     if (utilisateurChoisi == null) return;
 
     await db.ajouterUtilisateurAuGroupe(
-      utilisateurChoisi.id!,
+      utilisateurChoisi.email,
       widget.groupeId,
     );
 
@@ -188,7 +193,7 @@ class _MembresPageState extends State<MembresPage> {
     final db = DatabaseHelper();
 
     await db.retirerUtilisateurDuGroupe(
-      membre.id!,
+      membre.email,
       widget.groupeId,
     );
 
@@ -239,7 +244,7 @@ class _MembresPageState extends State<MembresPage> {
 
     await db.transfererAdmin(
       widget.groupeId,
-      membre.id!,
+      membre.email,
     );
 
     await chargerMembres();
@@ -372,7 +377,7 @@ class _MembresPageState extends State<MembresPage> {
 
                               await db.accepterDemandeMembre(
                                 widget.groupeId,
-                                demande.id!,
+                                demande.email,
                               );
 
                               await testerDemandes();
@@ -400,7 +405,7 @@ class _MembresPageState extends State<MembresPage> {
 
                               await db.refuserDemandeMembre(
                                 widget.groupeId,
-                                demande.id!,
+                                demande.email,
                               );
 
                               await testerDemandes();

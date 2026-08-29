@@ -19,39 +19,105 @@ class _HomePageState extends State<HomePage> {
   bool chargement = true;
   List<Groupe> groupes = [];
   Set<int> groupesAdmin = {};
+  List<String> typesEspaces = [
+    "Classe",
+    "Club",
+    "Association",
+    "Projet",
+  ];
+
   @override
   void initState() {
     super.initState();
     chargerDonnees();
+    chargerTypesEspaces();
   }
 
 
   Future<void> chargerDonnees() async {
     final db = DatabaseHelper();
 
-    final groupesSQLite = await db.getGroupes();
+    try {
+      final utilisateur = await db.getUtilisateurActuel();
 
-    Set<int> admins = {};
+      print("======================================");
+      print("👤 UTILISATEUR ACTUEL");
+      print("ID SQLite : ${utilisateur.id}");
+      print("Nom : ${utilisateur.nom}");
+      print("Email : ${utilisateur.email}");
 
-    for (final groupe in groupesSQLite) {
-      final role = await db.getRoleUtilisateur(groupe.id!);
+      // Récupérer TOUS les groupes depuis Supabase
+      final groupesSQLite = await db.getGroupes();
 
-      if (role == "admin") {
-        admins.add(groupe.id!);
+      Set<int> admins = {};
+
+      // Vérifier le rôle de l'utilisateur actuel
+      // dans chaque groupe
+      for (final groupe in groupesSQLite) {
+        if (groupe.id == null) continue;
+
+        final role = await db.getRoleUtilisateur(groupe.id!);
+
+        print(
+          "📌 Groupe : ${groupe.nom} | "
+              "ID : ${groupe.id} | "
+              "Utilisateur : ${utilisateur.nom} | "
+              "Rôle : $role",
+        );
+
+        // Seulement les admins
+        if (role == "admin") {
+          admins.add(groupe.id!);
+        }
       }
+
+      print("👑 GROUPES ADMIN DE ${utilisateur.nom} : $admins");
+      print("======================================");
+
+      if (!mounted) return;
+
+      setState(() {
+        // IMPORTANT :
+        // Tous les groupes sont affichés
+        groupes = groupesSQLite;
+
+        // Mais seuls les groupes administrés
+        // sont dans groupesAdmin
+        groupesAdmin = admins;
+
+        chargement = false;
+      });
+    } catch (e) {
+      print("❌ ERREUR CHARGEMENT GROUPES : $e");
+
+      if (!mounted) return;
+
+      setState(() {
+        chargement = false;
+      });
     }
-
-    if (!mounted) return;
-
-    setState(() {
-      groupes = groupesSQLite;
-      groupesAdmin = admins;
-      chargement = false;
-    });
-
-    print("GROUPES ADMIN : $groupesAdmin");
   }
 
+
+
+
+  Future<void> chargerTypesEspaces() async {
+    final db = DatabaseHelper();
+
+    try {
+      final types = await db.getTypesEspaces();
+
+      if (!mounted) return;
+
+      setState(() {
+        typesEspaces = types;
+      });
+
+      print("✅ TYPES D'ESPACES CHARGÉS : $typesEspaces");
+    } catch (e) {
+      print("❌ ERREUR CHARGEMENT TYPES ESPACES : $e");
+    }
+  }
 
   File? imageGroupe;
 
@@ -87,36 +153,128 @@ class _HomePageState extends State<HomePage> {
 
                     DropdownButtonFormField<String>(
                       initialValue: typeSelectionne,
+
                       decoration: const InputDecoration(
                         labelText: "Type d'espace",
                         border: OutlineInputBorder(),
                       ),
-                      items: const [
-                        DropdownMenuItem(
-                          value: "Classe",
-                          child: Text("Classe"),
-                        ),
-                        DropdownMenuItem(
-                          value: "Club",
-                          child: Text("Club"),
-                        ),
-                        DropdownMenuItem(
-                          value: "Association",
-                          child: Text("Association"),
-                        ),
-                        DropdownMenuItem(
-                          value: "Projet",
-                          child: Text("Projet"),
+
+                      items: [
+                        ...typesEspaces.map((type) {
+                          return DropdownMenuItem<String>(
+                            value: type,
+                            child: Text(type),
+                          );
+                        }),
+
+                        const DropdownMenuItem<String>(
+                          value: "__ajouter__",
+                          child: Row(
+                            children: [
+                              Icon(
+                                Icons.add,
+                                color: Colors.green,
+                              ),
+                              SizedBox(width: 8),
+                              Text(
+                                "Ajouter un type",
+                                style: TextStyle(
+                                  color: Colors.green,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                            ],
+                          ),
                         ),
                       ],
-                      onChanged: (value) {
-                        if (value != null) {
+
+                      onChanged: (value) async {
+                        if (value == null) return;
+
+                        // ==============================
+                        // TYPE EXISTANT
+                        // ==============================
+                        if (value != "__ajouter__") {
                           setDialogState(() {
                             typeSelectionne = value;
                           });
+
+                          print("🔵 TYPE CHOISI = $typeSelectionne");
+                          return;
+                        }
+
+                        // ==============================
+                        // AJOUTER UN NOUVEAU TYPE
+                        // ==============================
+
+                        final controller = TextEditingController();
+
+                        final nouveauType = await showDialog<String>(
+                          context: context,
+                          builder: (context) {
+                            return AlertDialog(
+                              title: const Text("Ajouter un type d'espace"),
+
+                              content: TextField(
+                                controller: controller,
+                                autofocus: true,
+                                decoration: const InputDecoration(
+                                  labelText: "Nom du type",
+                                  hintText: "Ex : Gaming",
+                                  border: OutlineInputBorder(),
+                                ),
+                              ),
+
+                              actions: [
+                                TextButton(
+                                  onPressed: () {
+                                    Navigator.pop(context);
+                                  },
+                                  child: const Text("Annuler"),
+                                ),
+
+                                ElevatedButton(
+                                  onPressed: () {
+                                    final nom = controller.text.trim();
+
+                                    if (nom.isNotEmpty) {
+                                      Navigator.pop(context, nom);
+                                    }
+                                  },
+                                  child: const Text("Ajouter"),
+                                ),
+                              ],
+                            );
+                          },
+                        );
+
+                        if (nouveauType == null || nouveauType.isEmpty) {
+                          return;
+                        }
+
+                        try {
+                          final db = DatabaseHelper();
+
+                          await db.ajouterTypeEspace(nouveauType);
+
+                          // IMPORTANT : uniquement setDialogState ici
+                          setDialogState(() {
+                            if (!typesEspaces.contains(nouveauType)) {
+                              typesEspaces.add(nouveauType);
+                            }
+
+                            typeSelectionne = nouveauType;
+                          });
+
+                          print("🟢 NOUVEAU TYPE = $nouveauType");
+                          print("🟢 TYPE SÉLECTIONNÉ = $typeSelectionne");
+
+                        } catch (e) {
+                          print("❌ ERREUR AJOUT TYPE : $e");
                         }
                       },
                     ),
+
 
                     const SizedBox(height: 15),
 
@@ -185,6 +343,7 @@ class _HomePageState extends State<HomePage> {
                         return;
                       }
 
+                      print("🔥 TYPE FINAL AVANT CRÉATION = $typeSelectionne");
                       final nouveauGroupe = Groupe(
                         nom: nom,
                         description: description,
@@ -245,19 +404,14 @@ class _HomePageState extends State<HomePage> {
       },
     );
   }
-
-
-
   Future<void> changerCompte() async {
     final db = DatabaseHelper();
-
-    await db.creerUtilisateursTest();
 
     final utilisateurs = await db.getTousLesUtilisateurs();
 
     if (!mounted) return;
 
-    final utilisateurChoisi = await showDialog<int>(
+    final utilisateurChoisi = await showDialog<String>(
       context: context,
       builder: (context) {
         return AlertDialog(
@@ -277,7 +431,10 @@ class _HomePageState extends State<HomePage> {
                   title: Text(utilisateur.nom),
                   subtitle: Text(utilisateur.email),
                   onTap: () {
-                    Navigator.pop(context, utilisateur.id);
+                    Navigator.pop(
+                      context,
+                      utilisateur.email,
+                    );
                   },
                 );
               },
@@ -293,6 +450,12 @@ class _HomePageState extends State<HomePage> {
 
     await chargerDonnees();
   }
+
+
+
+
+
+
 
   @override
   Widget build(BuildContext context) {
@@ -404,27 +567,17 @@ class _HomePageState extends State<HomePage> {
                   ),
                 ),
               ),
-              items: const [
-                DropdownMenuItem(
+              items: [
+                const DropdownMenuItem<String>(
                   value: "Tous",
                   child: Text("Tous"),
                 ),
-                DropdownMenuItem(
-                  value: "Classe",
-                  child: Text("Classe"),
-                ),
-                DropdownMenuItem(
-                  value: "Club",
-                  child: Text("Club"),
-                ),
-                DropdownMenuItem(
-                  value: "Association",
-                  child: Text("Association"),
-                ),
-                DropdownMenuItem(
-                  value: "Projet",
-                  child: Text("Projet"),
-                ),
+                ...typesEspaces.map((type) {
+                  return DropdownMenuItem<String>(
+                    value: type,
+                    child: Text(type),
+                  );
+                }),
               ],
               onChanged: (value) {
                 if (value != null) {
@@ -506,214 +659,293 @@ class _HomePageState extends State<HomePage> {
                     ),
 
                     // ✏️ Modifier
-                    trailing:   groupesAdmin.contains(groupesFiltres[index].id)
-                     ? Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                               Row(
-                               mainAxisSize: MainAxisSize.min,
-                       children: [
 
-                        // ✏️ Modifier
-                        IconButton(
-                          icon: Icon(Icons.edit,color: Colors.blue.shade700,),
-                          onPressed: () async {
-                            final groupe = groupesFiltres[index];
+                  trailing: groupesAdmin.contains(groupesFiltres[index].id)
+                      ? Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      // ✏️ Modifier
+                      IconButton(
+                        icon: Icon(
+                          Icons.edit,
+                          color: Colors.blue.shade700,
+                        ),
+                        onPressed: () async {
+                          final groupe = groupesFiltres[index];
 
-                            final nomController = TextEditingController(
-                              text: groupe.nom,
-                            );
+                          final nomController = TextEditingController(
+                            text: groupe.nom,
+                          );
 
-                            final descriptionController = TextEditingController(
-                              text: groupe.description,
-                            );
+                          final descriptionController = TextEditingController(
+                            text: groupe.description,
+                          );
 
-                            final membresController = TextEditingController(
-                              text: groupe.nombreMembres.toString(),
-                            );
-                            String typeSelectionne = groupe.type;
+                          final membresController = TextEditingController(
+                            text: groupe.nombreMembres.toString(),
+                          );
 
-                            final resultat = await showDialog<bool>(
-                              context: context,
-                              builder: (context) {
-                                return AlertDialog(
-                                  title: const Text("Modifier le groupe"),
-                                  content: Column(
-                                    mainAxisSize: MainAxisSize.min,
-                                    children: [
-                                      TextField(
-                                        controller: nomController,
-                                        decoration: const InputDecoration(
-                                          labelText: "Nom du groupe",
-                                          border: OutlineInputBorder(),
-                                        ),
+                          String typeSelectionne = groupe.type;
+
+                          final resultat = await showDialog<bool>(
+                            context: context,
+                            builder: (context) {
+                              return AlertDialog(
+                                title: const Text("Modifier le groupe"),
+                                content: Column(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    TextField(
+                                      controller: nomController,
+                                      decoration: const InputDecoration(
+                                        labelText: "Nom du groupe",
+                                        border: OutlineInputBorder(),
+                                      ),
+                                    ),
+
+                                    const SizedBox(height: 10),
+
+                                    TextField(
+                                      controller: descriptionController,
+                                      maxLines: 3,
+                                      decoration: const InputDecoration(
+                                        labelText: "Description",
+                                        border: OutlineInputBorder(),
+                                      ),
+                                    ),
+
+                                    const SizedBox(height: 10),
+
+                                    DropdownButtonFormField<String>(
+                                      initialValue: typeSelectionne,
+                                      decoration: const InputDecoration(
+                                        labelText: "Type d'espace",
+                                        border: OutlineInputBorder(),
                                       ),
 
-                                      const SizedBox(height: 10),
+                                      items: [
+                                        ...typesEspaces.map((type) {
+                                          return DropdownMenuItem<String>(
+                                            value: type,
+                                            child: Text(type),
+                                          );
+                                        }),
 
-                                      TextField(
-                                        controller: descriptionController,
-                                        maxLines: 3,
-                                        decoration: const InputDecoration(
-                                          labelText: "Description",
-                                          border: OutlineInputBorder(),
+                                        const DropdownMenuItem<String>(
+                                          value: "__ajouter__",
+                                          child: Row(
+                                            children: [
+                                              Icon(
+                                                Icons.add,
+                                                color: Colors.green,
+                                              ),
+                                              SizedBox(width: 8),
+                                              Text(
+                                                "Ajouter un type",
+                                                style: TextStyle(
+                                                  color: Colors.green,
+                                                  fontWeight: FontWeight.bold,
+                                                ),
+                                              ),
+                                            ],
+                                          ),
                                         ),
-                                      ),
+                                      ],
 
+                                      onChanged: (value) async {
+                                        if (value == null) return;
 
-                                      const SizedBox(height: 10),
+                                        // Si l'utilisateur choisit "+"
+                                        if (value == "__ajouter__") {
+                                          final controller = TextEditingController();
 
-                                      DropdownButtonFormField<String>(
-                                        initialValue: typeSelectionne,
-                                        decoration: const InputDecoration(
-                                          labelText: "Type d'espace",
-                                          border: OutlineInputBorder(),
-                                        ),
-                                        items: const [
-                                          DropdownMenuItem(
-                                            value: "Classe",
-                                            child: Text("Classe"),
-                                          ),
-                                          DropdownMenuItem(
-                                            value: "Club",
-                                            child: Text("Club"),
-                                          ),
-                                          DropdownMenuItem(
-                                            value: "Association",
-                                            child: Text("Association"),
-                                          ),
-                                          DropdownMenuItem(
-                                            value: "Projet",
-                                            child: Text("Projet"),
-                                          ),
-                                        ],
-                                        onChanged: (value) {
-                                          if (value != null) {
-                                            typeSelectionne = value;
+                                          final nouveauType = await showDialog<String>(
+                                            context: context,
+                                            builder: (context) {
+                                              return AlertDialog(
+                                                title: const Text("Ajouter un type d'espace"),
+                                                content: TextField(
+                                                  controller: controller,
+                                                  autofocus: true,
+                                                  decoration: const InputDecoration(
+                                                    labelText: "Nom du type",
+                                                    hintText: "Ex : Gaming",
+                                                    border: OutlineInputBorder(),
+                                                  ),
+                                                ),
+                                                actions: [
+                                                  TextButton(
+                                                    onPressed: () {
+                                                      Navigator.pop(context);
+                                                    },
+                                                    child: const Text("Annuler"),
+                                                  ),
+                                                  ElevatedButton(
+                                                    onPressed: () {
+                                                      final nom = controller.text.trim();
+
+                                                      if (nom.isNotEmpty) {
+                                                        Navigator.pop(context, nom);
+                                                      }
+                                                    },
+                                                    child: const Text("Ajouter"),
+                                                  ),
+                                                ],
+                                              );
+                                            },
+                                          );
+
+                                          if (nouveauType == null || nouveauType.isEmpty) return;
+
+                                          try {
+                                            final db = DatabaseHelper();
+
+                                            await db.ajouterTypeEspace(nouveauType);
+
+                                            // Ajouter immédiatement le nouveau type dans la liste
+                                            setState(() {
+                                              if (!typesEspaces.contains(nouveauType)) {
+                                                typesEspaces.add(nouveauType);
+                                              }
+                                            });
+
+                                            typeSelectionne = nouveauType;
+
+                                            print("✅ NOUVEAU TYPE AJOUTÉ : $nouveauType");
+                                          } catch (e) {
+                                            print("❌ ERREUR AJOUT TYPE : $e");
                                           }
-                                        },
-                                      ),
 
-                                      const SizedBox(height: 10),
+                                          return;
+                                        }
 
-                                      TextField(
-                                        controller: membresController,
-                                        keyboardType: TextInputType.number,
-                                        decoration: const InputDecoration(
-                                          labelText: "Nombre de membres",
-                                          border: OutlineInputBorder(),
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                  actions: [
-                                    TextButton(
-                                      onPressed: () {
-                                        Navigator.pop(context, false);
+                                        // Type normal
+                                        setState(() {
+                                          typeSelectionne = value;
+                                        });
                                       },
-                                      child: const Text("Annuler"),
                                     ),
 
-                                    ElevatedButton(
-                                      onPressed: () {
-                                        Navigator.pop(context, true);
-                                      },
-                                      child: const Text("Enregistrer"),
+                                    const SizedBox(height: 10),
+
+                                    TextField(
+                                      controller: membresController,
+                                      keyboardType: TextInputType.number,
+                                      decoration: const InputDecoration(
+                                        labelText: "Nombre de membres",
+                                        border: OutlineInputBorder(),
+                                      ),
                                     ),
                                   ],
-                                );
-                              },
-                            );
-
-                            if (resultat == true) {
-                              final nouveauNom = nomController.text.trim();
-                              final nouvelleDescription =
-                              descriptionController.text.trim();
-
-                              final nouveauNombre =
-                              int.tryParse(membresController.text.trim());
-
-                              if (nouveauNom.isEmpty ||
-                                  nouvelleDescription.isEmpty ||
-                                  nouveauNombre == null) {
-                                return;
-                              }
-
-                              final db = DatabaseHelper();
-
-                              await db.modifierGroupe(
-                                groupe.id!,
-                                nouveauNom,
-                                nouvelleDescription,
-                                nouveauNombre,
-                                typeSelectionne,
+                                ),
+                                actions: [
+                                  TextButton(
+                                    onPressed: () {
+                                      Navigator.pop(context, false);
+                                    },
+                                    child: const Text("Annuler"),
+                                  ),
+                                  ElevatedButton(
+                                    onPressed: () {
+                                      Navigator.pop(context, true);
+                                    },
+                                    child: const Text("Enregistrer"),
+                                  ),
+                                ],
                               );
+                            },
+                          );
 
-                              setState(() {
-                                groupe.nom = nouveauNom;
-                                groupe.description = nouvelleDescription;
-                                groupe.nombreMembres = nouveauNombre;
-                                groupe.type = typeSelectionne;
-                              });
+                          if (resultat == true) {
+                            final nouveauNom = nomController.text.trim();
+                            final nouvelleDescription =
+                            descriptionController.text.trim();
+
+                            final nouveauNombre =
+                            int.tryParse(membresController.text.trim());
+
+                            if (nouveauNom.isEmpty ||
+                                nouvelleDescription.isEmpty ||
+                                nouveauNombre == null) {
+                              return;
                             }
-                          },
-                        ),
 
-                        // 🗑️ Supprimer
-                        IconButton(
-                          icon: Icon(Icons.delete,color: Colors.red.shade700, ),
-                          onPressed: () async {
-                            final groupe = groupesFiltres[index];
+                            final db = DatabaseHelper();
 
-                            final confirmation = await showDialog<bool>(
-                              context: context,
-                              builder: (context) {
-                                return AlertDialog(
-                                  title: const Text("Supprimer le groupe"),
-                                  content: const Text(
-                                    "Voulez-vous vraiment supprimer ce groupe ? "
-                                        "Ses publications et commentaires seront également supprimés.",
-                                  ),
-                                  actions: [
-                                    TextButton(
-                                      onPressed: () {
-                                        Navigator.pop(context, false);
-                                      },
-                                      child: const Text("Annuler"),
-                                    ),
-
-                                    ElevatedButton(
-                                      onPressed: () {
-                                        Navigator.pop(context, true);
-                                      },
-                                      child: const Text("Supprimer"),
-                                    ),
-                                  ],
-                                );
-                              },
+                            await db.modifierGroupe(
+                              groupe.id!,
+                              nouveauNom,
+                              nouvelleDescription,
+                              nouveauNombre,
+                              typeSelectionne,
                             );
 
-                            if (confirmation == true) {
-                              final db = DatabaseHelper();
+                            setState(() {
+                              groupe.nom = nouveauNom;
+                              groupe.description = nouvelleDescription;
+                              groupe.nombreMembres = nouveauNombre;
+                              groupe.type = typeSelectionne;
+                            });
+                          }
+                        },
+                      ),
 
-                              await db.supprimerGroupe(groupe.id!);
-
-                              setState(() {
-                                groupesFiltres.removeAt(index);
-                                groupes.removeWhere(
-                                      (g) => g.id == groupe.id,
-                                );
-                              });
-                            }
-                          },
+                      // 🗑️ Supprimer
+                      IconButton(
+                        icon: Icon(
+                          Icons.delete,
+                          color: Colors.red.shade700,
                         ),
-                      ],
-                    ),
-                      ],
-                    )
-                    : null,
+                        onPressed: () async {
+                          final groupe = groupesFiltres[index];
 
-                      onTap: () {
+                          final confirmation = await showDialog<bool>(
+                            context: context,
+                            builder: (context) {
+                              return AlertDialog(
+                                title: const Text("Supprimer le groupe"),
+                                content: const Text(
+                                  "Voulez-vous vraiment supprimer le groupe ? "
+                                      "Ses publications et commentaires seront également supprimés.",
+                                ),
+                                actions: [
+                                  TextButton(
+                                    onPressed: () {
+                                      Navigator.pop(context, false);
+                                    },
+                                    child: const Text("Annuler"),
+                                  ),
+                                  ElevatedButton(
+                                    onPressed: () {
+                                      Navigator.pop(context, true);
+                                    },
+                                    child: const Text("Supprimer"),
+                                  ),
+                                ],
+                              );
+                            },
+                          );
+
+                          if (confirmation == true) {
+                            final db = DatabaseHelper();
+
+                            await db.supprimerGroupe(groupe.id!);
+
+                            setState(() {
+                              groupes.removeWhere(
+                                    (g) => g.id == groupe.id,
+                              );
+                            });
+                          }
+                        },
+                      ),
+                    ],
+                  )
+                      : null,
+
+
+
+                    onTap: () {
                       Navigator.push(
                         context,
                         MaterialPageRoute(

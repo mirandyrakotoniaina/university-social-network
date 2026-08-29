@@ -1,1593 +1,1754 @@
 
-import 'package:sqflite/sqflite.dart';
-import 'package:path/path.dart';
+import 'dart:io';
+
+import 'package:supabase_flutter/supabase_flutter.dart';
+
 import '../models/publication.dart';
 import '../models/commentaire.dart';
 import '../models/groupe.dart';
-import 'dart:io';
 import '../models/utilisateurs.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
-  class DatabaseHelper {
-    static Database? _database;
-    static int? utilisateurConnecteId;
 
-    Future<Database> get database async {
-      if (_database != null) {
-        return _database!;
-      }
+class DatabaseHelper {
+final SupabaseClient supabase = Supabase.instance.client;
 
-      _database = await _initDatabase();
-      return _database!;
-    }
+// ============================================================
+// UTILISATEUR CONNECTÉ / UTILISATEUR DE TEST
+// ============================================================
 
-    Future<Database> _initDatabase() async {
-      final chemin = await getDatabasesPath();
+static String? utilisateurConnecteEmail;
 
-      final cheminComplet = join(
-        chemin,
-        'reseau_social.db',
-      );
+// ID du profil actuellement utilisé
+static String? utilisateurConnecteId;
 
-      return await openDatabase(
-        cheminComplet,
-        version: 16,
-        onCreate: (db, version) async {
-// Nos tables seront créées ici
-          await db.execute('''
-            CREATE TABLE groupes (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            nom TEXT NOT NULL,
-            description TEXT NOT NULL,
-            nombreMembres INTEGER NOT NULL,
-            image TEXT NOT NULL,
-            type TEXT NOT NULL
-         )
-          ''');
-          await db.execute('''
-            CREATE TABLE publications (
-              id INTEGER PRIMARY KEY AUTOINCREMENT,
-              contenuMessage TEXT NOT NULL,
-              auteur TEXT NOT NULL,
-              datePublication TEXT NOT NULL,
-              nombreLikes INTEGER NOT NULL,
-              nombreCommentaires INTEGER NOT NULL,
-              aime INTEGER NOT NULL DEFAULT 0,
-              image TEXT,
-              groupe_id INTEGER NOT NULL
-            )
-           ''');
+// ------------------------------------------------------------
+// CHANGER D'UTILISATEUR
+// ------------------------------------------------------------
 
-          // Table des commentaires
-          await db.execute('''
-        CREATE TABLE commentaires (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        texte TEXT NOT NULL,
-        auteur TEXT NOT NULL,
-        dateCommentaire TEXT NOT NULL,
-        publication_id INTEGER NOT NULL,
-        parent_id INTEGER,
-        nombreLikes INTEGER NOT NULL DEFAULT 0
-      )
-    ''');
+Future<void> changerUtilisateur(String email) async {
+utilisateurConnecteEmail = email;
 
-          await db.execute('''
-  CREATE TABLE likes_commentaires (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    commentaire_id INTEGER NOT NULL,
-    utilisateur_id INTEGER NOT NULL
-  )
-''');
-// Table des membres
-          await db.execute('''
-      CREATE TABLE membres_groupes (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        groupe_id INTEGER NOT NULL,
-        utilisateur_id INTEGER NOT NULL,
-        role TEXT NOT NULL DEFAULT 'membre',
-        statut TEXT NOT NULL DEFAULT 'en_attente'
-      )
-    ''');
+final profil = await supabase
+    .from('profiles')
+    .select('id, nom, email')
+    .eq('email', email)
+    .maybeSingle();
 
+if (profil != null) {
+utilisateurConnecteId = profil['id'] as String?;
+} else {
+utilisateurConnecteId = null;
+}
 
-          await db.execute('''
-  CREATE TABLE utilisateurs (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    nom TEXT NOT NULL,
-    email TEXT NOT NULL
-  )
-''');
+print("======================================");
+print("👤 UTILISATEUR CHANGÉ");
+print("Nom : ${profil?['nom']}");
+print("Email : $email");
+print("ID : $utilisateurConnecteId");
+print("======================================");
+}
 
+// ============================================================
+// PROFIL UTILISATEUR
+// ============================================================
 
+Future<Map<String, dynamic>> getProfilUtilisateurActuel() async {
+String? email = utilisateurConnecteEmail;
 
-        },
-        onUpgrade: (db, oldVersion, newVersion) async {
-          if (oldVersion < 2) {
-            await db.execute('''
-      CREATE TABLE commentaires (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        texte TEXT NOT NULL,
-        auteur TEXT NOT NULL,
-        dateCommentaire TEXT NOT NULL,
-        publication_id INTEGER NOT NULL,
-        parent_id INTEGER
-      )
-    ''');
-          }
+// Si aucun compte de test n'est sélectionné,
+// utiliser le compte Supabase Auth.
+if (email == null) {
+final user = supabase.auth.currentUser;
 
-          if (oldVersion < 4) {
-            await db.execute('''
-      ALTER TABLE publications
-      ADD COLUMN aime INTEGER NOT NULL DEFAULT 0
-    ''');
-          }
+if (user != null) {
+email = user.email;
+utilisateurConnecteId = user.id;
+}
+}
 
-          if (oldVersion < 6) {
-            await db.execute('''
-      CREATE TABLE membres_groupes (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        groupe_id INTEGER NOT NULL,
-        utilisateur_id INTEGER NOT NULL,
-        role TEXT NOT NULL DEFAULT 'membre'
-      )
-    ''');
-          }
+if (email == null) {
+throw Exception("Aucun utilisateur connecté.");
+}
 
-          if (oldVersion < 7) {
-            await db.execute('''
-      CREATE TABLE utilisateurs (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        nom TEXT NOT NULL,
-        email TEXT NOT NULL
-      )
-    ''');
+final profil = await supabase
+    .from('profiles')
+    .select('id, nom, email, created_at')
+    .eq('email', email)
+    .single();
 
-            await db.execute('''
-      ALTER TABLE membres_groupes
-      ADD COLUMN utilisateur_id INTEGER
-    ''');
-          }
+utilisateurConnecteId = profil['id'] as String?;
 
-          if (oldVersion < 11) {
-            await db.execute('''
-    ALTER TABLE membres_groupes
-    ADD COLUMN role TEXT NOT NULL DEFAULT 'membre'
-  ''');
-          }
+return profil;
+}
 
+// ------------------------------------------------------------
+// UTILISATEUR ACTUEL
+// ------------------------------------------------------------
 
-          if (oldVersion < 12) {
-            await db.execute('''
-    ALTER TABLE publications
-    ADD COLUMN image TEXT
-  ''');
-          }
+Future<Utilisateur> getUtilisateurActuel() async {
+final profil = await getProfilUtilisateurActuel();
 
-          if (oldVersion < 13) {
-            await db.execute('''
-    ALTER TABLE membres_groupes
-    ADD COLUMN statut TEXT NOT NULL DEFAULT 'en_attente'
-  ''');
+return Utilisateur(
+id: profil['id'] as String?,
+nom: profil['nom'] as String? ?? 'Utilisateur',
+email: profil['email'] as String,
+);
+}
 
-            await db.execute('''
-    UPDATE membres_groupes
-    SET statut = 'accepte'
-  ''');
-          }
+// ------------------------------------------------------------
+// NOM UTILISATEUR CONNECTÉ
+// ------------------------------------------------------------
 
-          if (oldVersion < 14) {
-            await db.execute('''
-    ALTER TABLE commentaires
-    ADD COLUMN nombreLikes INTEGER NOT NULL DEFAULT 0
-  ''');
-          }
+Future<String> getNomUtilisateurConnecte() async {
+final profil = await getProfilUtilisateurActuel();
 
-          if (oldVersion < 15) {
-            await db.execute('''
-    CREATE TABLE likes_commentaires (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      commentaire_id INTEGER NOT NULL,
-      utilisateur_id INTEGER NOT NULL
-    )
-  ''');
-          }
+return profil['nom'] as String? ?? 'Utilisateur';
+}
 
-          if (oldVersion < 16) {
-            await db.execute('''
-    CREATE TABLE publication_images (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      publication_id INTEGER NOT NULL,
-      image TEXT NOT NULL
-    )
-  ''');
-          }
-        },
-      );
-    }
+// ============================================================
+// UTILISATEURS DE TEST
+// ============================================================
 
+Future<void> creerUtilisateursTest() async {
+final utilisateurs = [
+{
+'nom': 'Mirandy',
+'email': 'mirandy@gmail.com',
+},
+{
+'nom': 'Alice',
+'email': 'alice@gmail.com',
+},
+{
+'nom': 'Bob',
+'email': 'bob@gmail.com',
+},
+];
 
+for (final utilisateur in utilisateurs) {
+final existe = await supabase
+    .from('profiles')
+    .select('id')
+    .eq('email', utilisateur['email']!)
+    .maybeSingle();
 
-    Future<int> insertGroupe(Groupe groupe) async {
-      final supabase = Supabase.instance.client;
+if (existe == null) {
+await supabase.from('profiles').insert(utilisateur);
 
-      // 1. Récupérer l'utilisateur actuel depuis SQLite
-      final utilisateur = await getUtilisateurActuel();
+print(
+"✅ Utilisateur créé : ${utilisateur['email']}",
+);
+}
+}
+}
 
-      // 2. Trouver son profil Supabase grâce à son email
-      final profil = await supabase
-          .from('profiles')
-          .select('id')
-          .eq('email', utilisateur.email)
-          .single();
+Future<List<Utilisateur>> getTousLesUtilisateurs() async {
+final resultats = await supabase
+    .from('profiles')
+    .select('id, nom, email, created_at')
+    .order('id', ascending: true);
 
-      final profileId = profil['id'];
+return resultats.map<Utilisateur>((profil) {
+return Utilisateur(
+id: profil['id'] as String?,
+nom: profil['nom'] as String? ?? 'Utilisateur',
+email: profil['email'] as String,
+);
+}).toList();
+}
 
-      // 3. Créer le groupe
-      final result = await supabase
-          .from('groupes')
-          .insert({
-        'nom': groupe.nom,
-        'description': groupe.description,
-        'nombreMembres': groupe.nombreMembres,
-        'image': groupe.image,
-        'type': groupe.type,
-      })
-          .select('id')
-          .single();
+// ============================================================
+// GROUPES
+//
+// TABLE groupes :
+// id              int8
+// nom             text
+// description     text
+// type            text
+// image            text
+// created_at       timestamptz
+// nombreMembres    int8
+// ============================================================
 
-      final groupeId = result['id'] as int;
+Future<int> insertGroupe(Groupe groupe) async {
+final profil = await getProfilUtilisateurActuel();
 
-      // 4. Le créateur devient automatiquement admin
-      await supabase.from('membres_groupes').insert({
-        'groupe_id': groupeId,
-        'utilisateur_id': profileId,
-        'role': 'admin',
-      });
+final profileId = profil['id'] as String;
 
-      return groupeId;
-    }
+// Création du groupe
+final result = await supabase
+    .from('groupes')
+    .insert({
+'nom': groupe.nom,
+'description': groupe.description,
+'type': groupe.type,
+'image': groupe.image,
+'nombreMembres': 1,
+})
+    .select('id')
+    .single();
 
+final groupeId = result['id'] as int;
 
-    Future<int> insertPublication(
-        Publication publication,
-        int groupeId,
-        ) async {
-      final supabase = Supabase.instance.client;
+// Le créateur devient automatiquement administrateur.
+await supabase.from('membres_groupes').insert({
+'groupe_id': groupeId,
+'utilisateur_id': profileId,
+'role': 'admin',
+'statut': 'accepte',
+});
 
-      // Utilisateur actuel depuis ton système SQLite
-      final utilisateur = await getUtilisateurActuel();
+print("======================================");
+print("✅ GROUPE CRÉÉ");
+print("Groupe ID : $groupeId");
+print("Créateur : $profileId");
+print("======================================");
 
-      // Récupérer son UUID dans profiles
-      final profil = await supabase
-          .from('profiles')
-          .select('id')
-          .eq('email', utilisateur.email)
-          .single();
+return groupeId;
+}
 
-      final profilId = profil['id'];
+// ------------------------------------------------------------
+// RÉCUPÉRER LES GROUPES
+// ------------------------------------------------------------
 
-      // Créer la publication dans Supabase
-      final result = await supabase
-          .from('publications')
-          .insert({
-        'contenuMessage': publication.contenuMessage,
-        'auteur': publication.auteur,
-        'auteur_id': profilId,
-        'datePublication': publication.datePublication.toIso8601String(),
-        'nombreLikes': publication.nombreLikes,
-        'nombreCommentaires': publication.nombreCommentaires,
-        'aime': publication.aime,
-        'groupe_id': groupeId,
-        'image': publication.images.isNotEmpty
-            ? publication.images.first
-            : null,
-      })
-          .select('id')
-          .single();
+Future<List<Groupe>> getGroupes() async {
+print("======================================");
+print("🔎 RÉCUPÉRATION DES GROUPES");
 
-      final publicationId = result['id'] as int;
+final resultats = await supabase
+    .from('groupes')
+    .select()
+    .order('id', ascending: false);
 
-      // Enregistrer toutes les photos dans publication_images
-      for (final image in publication.images) {
-        await supabase.from('publication_images').insert({
-          'publication_id': publicationId,
-          'image': image,
-        });
-      }
+print(
+"📦 Nombre total de groupes : ${resultats.length}",
+);
 
-      return publicationId;
-    }
-  Future<List<Groupe>> getGroupes() async {
-    final db = await database;
+final List<Groupe> groupes = [];
 
-    final resultats = await db.query('groupes');
+for (final map in resultats) {
+final groupeId = map['id'] as int;
 
-    List<Groupe> groupes = [];
+final nombreMembres =
+await getNombreMembresGroupe(groupeId);
 
-    for (final map in resultats) {
-      final groupeId = map['id'] as int;
+print(
+"📌 Groupe : ${map['nom']} | "
+"ID : $groupeId | "
+"Membres : $nombreMembres",
+);
 
-      final publications = await getPublications(groupeId);
+// Mettre à jour le compteur enregistré dans groupes.
+if (map['nombreMembres'] != nombreMembres) {
+await supabase
+    .from('groupes')
+    .update({
+'nombreMembres': nombreMembres,
+})
+    .eq('id', groupeId);
+}
 
-      final groupe = Groupe(
-        id: map['id'] as int,
-        nom: map['nom'] as String,
-        description: map['description'] as String,
-        nombreMembres: map['nombreMembres'] as int,
-        image: map['image'] as String,
-        type: map['type'] as String? ?? 'Classe',
-        publications: publications,
-      );
+final publications =
+await getPublications(groupeId);
 
-      groupes.add(groupe);
-    }
+groupes.add(
+Groupe(
+id: groupeId,
+nom: map['nom'] as String? ?? '',
+description:
+map['description'] as String? ?? '',
+nombreMembres: nombreMembres,
+image: map['image'] as String? ?? 'default.png',
+type: map['type'] as String? ?? 'Classe',
+publications: publications,
+),
+);
+}
 
-    return groupes;
-  }
+print(
+"✅ ${groupes.length} groupe(s) récupéré(s)",
+);
+print("======================================");
 
-    Future<void> ajouterMembre(
-        int groupeId,
-        int utilisateurId,
-        String role,
-        ) async {
-      final db = await database;
+return groupes;
+}
 
-      await db.insert(
-        'membres_groupes',
-        {
-          'groupe_id': groupeId,
-          'utilisateur_id': utilisateurId,
-          'role': role,
-        },
-      );
-    }
-
-
-
-    Future<List<Publication>> getPublications(int groupeId) async {
-      final supabase = Supabase.instance.client;
-
+  Future<List<String>> getTypesEspaces() async {
+    try {
       final resultats = await supabase
-          .from('publications')
-          .select()
-          .eq('groupe_id', groupeId)
-          .order('id', ascending: false);
+          .from('types_espace')
+          .select('*');
 
-      final utilisateurId = DatabaseHelper.utilisateurConnecteId;
+      print("📦 TYPES BRUTS SUPABASE : $resultats");
+      print("📊 NOMBRE DE TYPES : ${resultats.length}");
 
-      List<Publication> publications = [];
-
-      for (final map in resultats) {
-        final publicationId = map['id'] as int;
-
-        // Récupérer les photos
-        final resultatsImages = await supabase
-            .from('publication_images')
-            .select('image')
-            .eq('publication_id', publicationId)
-            .order('id', ascending: true);
-
-        List<String> images = resultatsImages
-            .map<String>((image) => image['image'] as String)
-            .toList();
-
-        if (images.isEmpty && map['image'] != null) {
-          images = [map['image'] as String];
-        }
-
-        // Récupérer tous les likes de cette publication
-        final likes = await supabase
-            .from('likes_publications')
-            .select('id, utilisateur_id')
-            .eq('publication_id', publicationId);
-
-        final nombreLikes = likes.length;
-
-        // Vérifier si l'utilisateur actuel a aimé
-        bool aime = false;
-
-        if (utilisateurId != null) {
-          aime = likes.any(
-                (like) => like['utilisateur_id'] == utilisateurId,
-          );
-        }
-
-        publications.add(
-          Publication(
-            id: publicationId,
-            contenuMessage: map['contenuMessage'] as String,
-            auteur: map['auteur'] as String,
-            datePublication: DateTime.parse(
-              map['datePublication'] as String,
-            ),
-            nombreLikes: nombreLikes,
-            nombreCommentaires: map['nombreCommentaires'] as int,
-            aime: aime,
-            images: images,
-          ),
-        );
-      }
-
-      return publications;
+      return resultats
+          .map<String>((element) => element['nom'] as String)
+          .toList();
+    } catch (e) {
+      print("❌ ERREUR GET TYPES : $e");
+      rethrow;
     }
-
-  Future<List<Map<String, dynamic>>> testPublications() async {
-    final db = await database;
-
-    return await db.query('publications');
   }
 
-  Future<void> supprimerBase() async {
-    final chemin = await getDatabasesPath();
+  Future<void> ajouterTypeEspace(String nom) async {
+    await supabase
+        .from('types_espace')
+        .insert({
+      'nom': nom,
+    });
 
-    final cheminComplet = join(
-      chemin,
-      'reseau_social.db',
-    );
-
-    await deleteDatabase(cheminComplet);
-
-    _database = null;
+    print("✅ TYPE D'ESPACE AJOUTÉ : $nom");
   }
 
 
-    Future updateLikes(
-        int publicationId,
-        int nombreLikes,
-        bool aime,
-        ) async {
-      final db = await database;
+// ============================================================
+// MEMBRES DU GROUPE
+//
+// TABLE membres_groupes :
+// id              int8
+// groupe_id       int8
+// utilisateur_id  uuid
+// role            text
+// statut          text
+// ============================================================
 
-      await db.update(
-        'publications',
-        {
-          'nombreLikes': nombreLikes,
-          'aime': aime ? 1 : 0,
-        },
-        where: 'id = ?',
-        whereArgs: [publicationId],
-      );
-    }
+Future<int> getNombreMembresGroupe(
+int groupeId,
+) async {
+final result = await supabase
+    .from('membres_groupes')
+    .select('id')
+    .eq('groupe_id', groupeId)
+    .eq('statut', 'accepte');
 
-    Future<void> updateCommentaires(int publicationId) async {
-      final supabase = Supabase.instance.client;
+return result.length;
+}
 
-      final result = await supabase
-          .from('commentaires')
-          .select('id')
-          .eq('publication_id', publicationId);
+// ------------------------------------------------------------
+// RÉCUPÉRER LES MEMBRES ACCEPTÉS
+// ------------------------------------------------------------
 
-      final nombre = result.length;
+Future<List<Utilisateur>> getMembresGroupe(
+int groupeId,
+) async {
+print("======================================");
+print("👥 CHARGEMENT DES MEMBRES");
+print("Groupe ID : $groupeId");
 
-      await supabase
-          .from('publications')
-          .update({
-        'nombreCommentaires': nombre,
-      })
-          .eq('id', publicationId);
+final membresSupabase = await supabase
+    .from('membres_groupes')
+    .select('id, utilisateur_id, role, statut')
+    .eq('groupe_id', groupeId)
+    .eq('statut', 'accepte');
 
-      print("✅ Nombre de commentaires mis à jour : $nombre");
-    }
+print(
+"📦 Membres Supabase : $membresSupabase",
+);
 
+final List<Utilisateur> membres = [];
 
+for (final membre in membresSupabase) {
+final profileId =
+membre['utilisateur_id'] as String;
 
-    Future<String> uploadImagePublication(File image) async {
-      final supabase = Supabase.instance.client;
+final profil = await supabase
+    .from('profiles')
+    .select('id, nom, email')
+    .eq('id', profileId)
+    .single();
 
-      try {
-        final nomFichier =
-            '${DateTime.now().millisecondsSinceEpoch}_${image.path.split('/').last}';
+membres.add(
+Utilisateur(
+id: profil['id'] as String?,
+nom:
+profil['nom'] as String? ?? 'Utilisateur',
+email: profil['email'] as String,
+role:
+membre['role'] as String? ?? 'membre',
+),
+);
+}
 
-        final chemin = 'publications/$nomFichier';
+print(
+"✅ ${membres.length} membre(s) chargé(s)",
+);
 
-        print("📤 UPLOAD IMAGE : ${image.path}");
+return membres;
+}
 
-        await supabase.storage
-            .from('publication-images')
-            .upload(
-          chemin,
-          image,
-          fileOptions: const FileOptions(
-            upsert: true,
-          ),
-        );
+// ------------------------------------------------------------
+// AUTRES MEMBRES
+// ------------------------------------------------------------
 
-        final url = supabase.storage
-            .from('publication-images')
-            .getPublicUrl(chemin);
+Future<List<Utilisateur>> getAutresMembres(
+int groupeId,
+) async {
+final profilActuel =
+await getProfilUtilisateurActuel();
 
-        print("✅ IMAGE UPLOADÉE : $url");
+final profileIdActuel =
+profilActuel['id'] as String;
 
-        return url;
-      } catch (e) {
-        print("❌ ERREUR UPLOAD IMAGE : $e");
-        rethrow;
-      }
-    }
+final resultats = await supabase
+    .from('membres_groupes')
+    .select(
+'id, utilisateur_id, role, statut',
+)
+    .eq('groupe_id', groupeId)
+    .eq('statut', 'accepte')
+    .neq(
+'utilisateur_id',
+profileIdActuel,
+);
 
-    Future<int> getNombreCommentaires(int publicationId) async {
-      final supabase = Supabase.instance.client;
+final List<Utilisateur> membres = [];
 
-      final result = await supabase
-          .from('commentaires')
-          .select('id')
-          .eq('publication_id', publicationId);
+for (final membre in resultats) {
+final profileId =
+membre['utilisateur_id'] as String;
 
-      return result.length;
-    }
+final profil = await supabase
+    .from('profiles')
+    .select('id, nom, email')
+    .eq('id', profileId)
+    .single();
 
+membres.add(
+Utilisateur(
+id: profil['id'] as String?,
+nom:
+profil['nom'] as String? ?? 'Utilisateur',
+email: profil['email'] as String,
+role:
+membre['role'] as String? ?? 'membre',
+),
+);
+}
 
-    Future<int> insertCommentaire(
-        Commentaire commentaire,
-        ) async {
-      final supabase = Supabase.instance.client;
+return membres;
+}
 
-      // Récupérer l'utilisateur actuel depuis SQLite
-      final utilisateur = await getUtilisateurActuel();
+// ============================================================
+// REJOINDRE UN GROUPE
+// ============================================================
 
-      // Trouver son profil Supabase grâce à son email
+Future<void> rejoindreGroupe(
+int groupeId,
+) async {
+final profil =
+await getProfilUtilisateurActuel();
+
+final profileId =
+profil['id'] as String;
+
+print("======================================");
+print("📩 DEMANDE POUR REJOINDRE LE GROUPE");
+print("Utilisateur : $profileId");
+print("Groupe : $groupeId");
+
+// Chercher UNE éventuelle association existante.
+final existantes = await supabase
+    .from('membres_groupes')
+    .select(
+'id, groupe_id, utilisateur_id, role, statut',
+)
+    .eq('groupe_id', groupeId)
+    .eq('utilisateur_id', profileId);
+
+// S'il y a déjà une demande ou une adhésion,
+// ne pas créer une deuxième ligne.
+if (existantes.isNotEmpty) {
+print(
+"⚠️ Association déjà existante : $existantes",
+);
+return;
+}
+
+await supabase.from('membres_groupes').insert({
+'groupe_id': groupeId,
+'utilisateur_id': profileId,
+'role': 'membre',
+'statut': 'en_attente',
+});
+
+print("✅ DEMANDE ENVOYÉE");
+print("======================================");
+}
+
+// ============================================================
+// EST MEMBRE ?
+// ============================================================
+
+Future<bool> estMembre(
+int groupeId,
+) async {
+final profil =
+await getProfilUtilisateurActuel();
+
+final profileId =
+profil['id'] as String;
+
+final resultat = await supabase
+    .from('membres_groupes')
+    .select('id')
+    .eq('groupe_id', groupeId)
+    .eq('utilisateur_id', profileId)
+    .eq('statut', 'accepte')
+    .limit(1);
+
+return resultat.isNotEmpty;
+}
+
+// ============================================================
+// STATUT DE LA DEMANDE
+// ============================================================
+
+Future<String> getStatutGroupe(
+int groupeId,
+) async {
+final profil =
+await getProfilUtilisateurActuel();
+
+final profileId =
+profil['id'] as String;
+
+final resultat = await supabase
+    .from('membres_groupes')
+    .select('statut')
+    .eq('groupe_id', groupeId)
+    .eq('utilisateur_id', profileId)
+    .maybeSingle();
+
+if (resultat == null) {
+return 'aucun';
+}
+
+return resultat['statut'] as String? ?? 'aucun';
+}
+
+// ============================================================
+// ROLE UTILISATEUR
+// ============================================================
+
+Future<String> getRoleUtilisateur(
+int groupeId,
+) async {
+final profil =
+await getProfilUtilisateurActuel();
+
+final profileId =
+profil['id'] as String;
+
+final resultat = await supabase
+    .from('membres_groupes')
+    .select('role, statut')
+    .eq('groupe_id', groupeId)
+    .eq('utilisateur_id', profileId)
+    .eq('statut', 'accepte')
+    .maybeSingle();
+
+if (resultat == null) {
+return 'aucun';
+}
+
+return resultat['role'] as String? ?? 'membre';
+}
+
+// ============================================================
+// DEMANDES DE MEMBRES
+// ============================================================
+
+  Future<List<Utilisateur>> getDemandesMembres(
+      int groupeId,
+      ) async {
+    print("======================================");
+    print("📩 RECHERCHE DES DEMANDES");
+    print("GROUPE ID : $groupeId");
+
+    final toutesLesLignes = await supabase
+        .from('membres_groupes')
+        .select('id, groupe_id, utilisateur_id, role, statut')
+        .eq('groupe_id', groupeId);
+
+    print("📦 TOUTES LES LIGNES DU GROUPE : $toutesLesLignes");
+
+    final demandesSupabase = await supabase
+        .from('membres_groupes')
+        .select('id, groupe_id, utilisateur_id, role, statut')
+        .eq('groupe_id', groupeId)
+        .eq('statut', 'en_attente');
+
+    print("📩 LIGNES EN ATTENTE : $demandesSupabase");
+
+    final List<Utilisateur> demandes = [];
+
+    for (final demande in demandesSupabase) {
+      final profileId = demande['utilisateur_id'] as String;
+
       final profil = await supabase
           .from('profiles')
-          .select('id')
-          .eq('email', utilisateur.email)
+          .select('id, nom, email')
+          .eq('id', profileId)
           .single();
 
-      final profilId = profil['id'];
-
-      // Ajouter le commentaire dans Supabase
-      final result = await supabase
-          .from('commentaires')
-          .insert({
-        'texte': commentaire.texte,
-        'auteur': commentaire.auteur,
-        'auteur_id': profilId,
-        'dateCommentaire':
-        commentaire.dateCommentaire.toIso8601String(),
-        'publication_id': commentaire.publicationId,
-        'parent_id': commentaire.parentId,
-      })
-          .select('id')
-          .single();
-
-      return result['id'] as int;
-    }
-
-    Future<List<Commentaire>> getCommentaires(int publicationId) async {
-      final supabase = Supabase.instance.client;
-
-      final resultats = await supabase
-          .from('commentaires')
-          .select()
-          .eq('publication_id', publicationId)
-          .order('id', ascending: true);
-
-      List<Commentaire> commentaires = [];
-
-      for (final map in resultats) {
-        final commentaireId = map['id'] as int;
-
-        // Récupérer le nombre réel de likes depuis Supabase
-        final likes = await supabase
-            .from('likes_commentaires')
-            .select('id')
-            .eq('commentaire_id', commentaireId);
-
-        final nombreLikes = likes.length;
-
-        commentaires.add(
-          Commentaire(
-            id: commentaireId,
-            texte: map['texte'] as String,
-            auteur: map['auteur'] as String,
-            dateCommentaire: DateTime.parse(
-              map['dateCommentaire'] as String,
-            ),
-            publicationId: map['publication_id'] as int,
-            parentId: map['parent_id'] as int?,
-            nombreLikes: nombreLikes,
-          ),
-        );
-      }
-
-      return commentaires;
-    }
-
-
-    Future<void> modifierLikeCommentaire(
-        int commentaireId,
-        bool aime,
-        ) async {
-      final db = await database;
-
-      await db.rawUpdate(
-        '''
-    UPDATE commentaires
-    SET nombreLikes = nombreLikes ${aime ? '+' : '-'} 1
-    WHERE id = ?
-    ''',
-        [commentaireId],
+      demandes.add(
+        Utilisateur(
+          id: profil['id'] as String?,
+          nom: profil['nom'] as String? ?? 'Utilisateur',
+          email: profil['email'] as String,
+          role: demande['role'] as String? ?? 'membre',
+        ),
       );
     }
 
-    Future<bool> aDejaAimeCommentaire(
-        int commentaireId,
-        int utilisateurId,
-        ) async {
-      final supabase = Supabase.instance.client;
+    print("📩 DEMANDES FINALES : $demandes");
+    print("======================================");
 
-      final resultat = await supabase
-          .from('likes_commentaires')
-          .select('id')
-          .eq('commentaire_id', commentaireId)
-          .eq('utilisateur_id', utilisateurId)
-          .limit(1);
+    return demandes;
+  }
 
-      return resultat.isNotEmpty;
-    }
-    Future<void> ajouterLikeCommentaire(
-        int commentaireId,
-        int utilisateurId,
-        ) async {
-      final supabase = Supabase.instance.client;
+// ============================================================
+// ACCEPTER UNE DEMANDE
+// ============================================================
 
-      await supabase.from('likes_commentaires').insert({
-        'commentaire_id': commentaireId,
-        'utilisateur_id': utilisateurId,
-      });
 
-      print(
-        "✅ LIKE AJOUTÉ : commentaire=$commentaireId utilisateur=$utilisateurId",
-      );
-    }
+  Future<void> accepterDemandeMembre(
+      int groupeId,
+      String email,
+      ) async {
+    print("======================================");
+    print("📩 ACCEPTATION DEMANDE");
+    print("Groupe : $groupeId");
+    print("Email : $email");
 
-    Future<void> retirerLikeCommentaire(
-        int commentaireId,
-        int utilisateurId,
-        ) async {
-      final supabase = Supabase.instance.client;
+    // 1️⃣ Récupérer le profil avec son email
+    final profil = await supabase
+        .from('profiles')
+        .select('id, nom, email')
+        .eq('email', email)
+        .maybeSingle();
 
-      await supabase
-          .from('likes_commentaires')
-          .delete()
-          .eq('commentaire_id', commentaireId)
-          .eq('utilisateur_id', utilisateurId);
-
-      print(
-        "✅ LIKE RETIRÉ : commentaire=$commentaireId utilisateur=$utilisateurId",
-      );
+    if (profil == null) {
+      throw Exception("Utilisateur introuvable.");
     }
 
-    Future<int> getNombreLikesCommentaire(int commentaireId) async {
-      final supabase = Supabase.instance.client;
+    final utilisateurId = profil['id'] as String;
 
-      final resultat = await supabase
-          .from('likes_commentaires')
-          .select('id')
-          .eq('commentaire_id', commentaireId);
+    print("👤 ID UTILISATEUR : $utilisateurId");
 
-      final total = resultat.length;
+    // 2️⃣ Récupérer la demande correspondant
+    // au groupe ET à l'utilisateur
+    final demande = await supabase
+        .from('membres_groupes')
+        .select('id, groupe_id, utilisateur_id, role, statut')
+        .eq('groupe_id', groupeId)
+        .eq('utilisateur_id', utilisateurId)
+        .eq('statut', 'en_attente')
+        .maybeSingle();
 
-      print(
-        "✅ NOMBRE DE LIKES SUPABASE : commentaire=$commentaireId total=$total",
-      );
-
-      return total;
-    }
-
-
-
-
-
-
-    Future<void> supprimerPublication(int publicationId) async {
-      final supabase = Supabase.instance.client;
-
-      // 1. Supprimer toutes les photos associées
-      await supabase
-          .from('publication_images')
-          .delete()
-          .eq('publication_id', publicationId);
-
-      // 2. Supprimer la publication
-      await supabase
-          .from('publications')
-          .delete()
-          .eq('id', publicationId);
-
-      print("✅ Publication $publicationId supprimée de Supabase");
-    }
-
-    Future<void> modifierPublication(
-        int publicationId,
-        String nouveauTexte,
-        ) async {
-      final supabase = Supabase.instance.client;
-
-      final resultat = await supabase
-          .from('publications')
-          .update({
-        'contenuMessage': nouveauTexte,
-      })
-          .eq('id', publicationId)
-          .select('id, contenuMessage');
-
-      print("✅ Publication modifiée dans Supabase : $resultat");
-    }
-
-
-    Future<void> modifierCommentaire(
-        int commentaireId,
-        String nouveauTexte,
-        ) async {
-      final supabase = Supabase.instance.client;
-
-      try {
-        final resultat = await supabase
-            .from('commentaires')
-            .update({
-          'texte': nouveauTexte,
-        })
-            .eq('id', commentaireId)
-            .select('id, texte');
-
-        print("✅ RÉSULTAT MODIFICATION : $resultat");
-      } catch (e) {
-        print("❌ ERREUR MODIFICATION COMMENTAIRE : $e");
-        rethrow;
-      }
-    }
-
-
-    Future<void> supprimerCommentaire(int commentaireId) async {
-      final supabase = Supabase.instance.client;
-
-      await supabase
-          .from('commentaires')
-          .delete()
-          .eq('id', commentaireId);
-
-      print("✅ Commentaire $commentaireId supprimé de Supabase");
-    }
-
-
-    Future<void> modifierGroupe(
-        int groupeId,
-        String nouveauNom,
-        String nouvelleDescription,
-        int nouveauNombreMembres,
-        String nouveauType,
-        ) async {
-      final db = await database;
-
-      await db.update(
-        'groupes',
-        {
-          'nom': nouveauNom,
-          'description': nouvelleDescription,
-          'nombreMembres': nouveauNombreMembres,
-          'type': nouveauType,
-        },
-        where: 'id = ?',
-        whereArgs: [groupeId],
+    if (demande == null) {
+      throw Exception(
+        "Aucune demande en attente pour cet utilisateur dans ce groupe.",
       );
     }
 
+    final demandeId = demande['id'] as int;
 
-    Future<void> supprimerGroupe(int groupeId) async {
-      final db = await database;
+    print("🆔 ID DE LA DEMANDE : $demandeId");
+    print("📋 DEMANDE AVANT : $demande");
 
-      // Récupérer les publications du groupe
-      final publications = await db.query(
-        'publications',
-        columns: ['id'],
-        where: 'groupe_id = ?',
-        whereArgs: [groupeId],
-      );
+    // 3️⃣ Accepter la demande
+    final resultatUpdate = await supabase
+        .from('membres_groupes')
+        .update({
+      'statut': 'accepte',
+    })
+        .eq('id', demandeId)
+        .select();
 
-      // Supprimer les commentaires liés aux publications
-      for (final publication in publications) {
-        final publicationId = publication['id'] as int;
+    print("📦 RÉSULTAT DE L'UPDATE : $resultatUpdate");
 
-        await db.delete(
-          'commentaires',
-          where: 'publication_id = ?',
-          whereArgs: [publicationId],
-        );
-      }
+    // 4️⃣ Vérifier que la modification a bien été effectuée
+    final verification = await supabase
+        .from('membres_groupes')
+        .select('id, groupe_id, utilisateur_id, role, statut')
+        .eq('id', demandeId)
+        .maybeSingle();
 
-      // Supprimer les publications
-      await db.delete(
-        'publications',
-        where: 'groupe_id = ?',
-        whereArgs: [groupeId],
-      );
+    print("📋 DEMANDE APRÈS : $verification");
 
-      // Supprimer le groupe
-      await db.delete(
-        'groupes',
-        where: 'id = ?',
-        whereArgs: [groupeId],
+    if (verification == null) {
+      throw Exception(
+        "Impossible de retrouver la demande après modification.",
       );
     }
 
-
-    Future<void> modifierNombreMembres(
-        int groupeId,
-        int nouveauNombre,
-        ) async {
-      final db = await database;
-
-      await db.update(
-        'groupes',
-        {
-          'nombreMembres': nouveauNombre,
-        },
-        where: 'id = ?',
-        whereArgs: [groupeId],
-      );
-    }
-    Future<bool> estMembre(int groupeId) async {
-      final db = await database;
-
-      final utilisateur = await getUtilisateurActuel();
-
-      print(
-        "VERIFICATION : groupe=$groupeId, utilisateur=${utilisateur.id}",
-      );
-
-      final resultat = await db.query(
-        'membres_groupes',
-        where: 'groupe_id = ? AND utilisateur_id = ?',
-        whereArgs: [
-          groupeId,
-          utilisateur.id,
-        ],
-      );
-
-      print("NOMBRE DE LIGNES TROUVÉES : ${resultat.length}");
-
-      return resultat.isNotEmpty;
-    }
-
-    Future<void> rejoindreGroupe(int groupeId) async {
-      final db = await database;
-
-      final utilisateur = await getUtilisateurActuel();
-
-      final existe = await db.query(
-        'membres_groupes',
-        where: 'groupe_id = ? AND utilisateur_id = ?',
-        whereArgs: [
-          groupeId,
-          utilisateur.id,
-        ],
-      );
-
-      if (existe.isNotEmpty) {
-        print("L'utilisateur a déjà une demande ou est déjà membre.");
-        return;
-      }
-
-      await db.insert(
-        'membres_groupes',
-        {
-          'groupe_id': groupeId,
-          'utilisateur_id': utilisateur.id,
-          'role': 'membre',
-          'statut': 'en_attente',
-        },
-      );
-
-      print(
-        "DEMANDE ENVOYÉE : utilisateur=${utilisateur.id}, groupe=$groupeId",
+    if (verification['statut'] != 'accepte') {
+      throw Exception(
+        "La demande n'a pas été acceptée. "
+            "Statut actuel : ${verification['statut']}",
       );
     }
 
-
-    Future<List<Utilisateur>> getDemandesMembres(int groupeId) async {
-      final db = await database;
-
-      final resultats = await db.rawQuery('''
-    SELECT utilisateurs.id,
-           utilisateurs.nom,
-           utilisateurs.email,
-           membres_groupes.role
-    FROM utilisateurs
-    INNER JOIN membres_groupes
-      ON utilisateurs.id = membres_groupes.utilisateur_id
-    WHERE membres_groupes.groupe_id = ?
-      AND membres_groupes.statut = 'en_attente'
-  ''', [groupeId]);
-
-      return resultats.map((map) {
-        return Utilisateur(
-          id: map['id'] as int,
-          nom: map['nom'] as String,
-          email: map['email'] as String,
-          role: map['role'] as String? ?? 'membre',
-        );
-      }).toList();
-    }
-
-    Future<void> accepterDemandeMembre(
-        int groupeId,
-        int utilisateurId,
-        ) async {
-      final db = await database;
-
-      await db.update(
-        'membres_groupes',
-        {
-          'statut': 'accepte',
-        },
-        where: 'groupe_id = ? AND utilisateur_id = ?',
-        whereArgs: [
-          groupeId,
-          utilisateurId,
-        ],
-      );
-
-      await db.rawUpdate(
-        '''
-    UPDATE groupes
-    SET nombreMembres = nombreMembres + 1
-    WHERE id = ?
-    ''',
-        [groupeId],
-      );
-    }
-
-    Future<void> refuserDemandeMembre(
-        int groupeId,
-        int utilisateurId,
-        ) async {
-      final db = await database;
-
-      await db.delete(
-        'membres_groupes',
-        where: 'groupe_id = ? AND utilisateur_id = ? AND statut = ?',
-        whereArgs: [
-          groupeId,
-          utilisateurId,
-          'en_attente',
-        ],
-      );
-    }
-    Future<void> accepterMembre(
-        int groupeId,
-        int utilisateurId,
-        ) async {
-      final db = await database;
-
-      // Vérifier que la demande existe
-      final demande = await db.query(
-        'membres_groupes',
-        where: 'groupe_id = ? AND utilisateur_id = ? AND statut = ?',
-        whereArgs: [
-          groupeId,
-          utilisateurId,
-          'en_attente',
-        ],
-      );
-
-      if (demande.isEmpty) {
-        return;
-      }
-
-      // Accepter la demande
-      await db.update(
-        'membres_groupes',
-        {
-          'statut': 'accepte',
-          'role': 'membre',
-        },
-        where: 'groupe_id = ? AND utilisateur_id = ?',
-        whereArgs: [
-          groupeId,
-          utilisateurId,
-        ],
-      );
-
-      // Augmenter le nombre de membres
-      await db.rawUpdate(
-        '''
-    UPDATE groupes
-    SET nombreMembres = nombreMembres + 1
-    WHERE id = ?
-    ''',
-        [groupeId],
-      );
-    }
-
-
-    Future<void> refuserMembre(
-        int groupeId,
-        int utilisateurId,
-        ) async {
-      final db = await database;
-
-      // Vérifier que la demande existe
-      final demande = await db.query(
-        'membres_groupes',
-        where: 'groupe_id = ? AND utilisateur_id = ? AND statut = ?',
-        whereArgs: [
-          groupeId,
-          utilisateurId,
-          'en_attente',
-        ],
-      );
-
-      if (demande.isEmpty) {
-        return;
-      }
-
-      // Supprimer la demande
-      await db.delete(
-        'membres_groupes',
-        where: 'groupe_id = ? AND utilisateur_id = ?',
-        whereArgs: [
-          groupeId,
-          utilisateurId,
-        ],
-      );
-    }
-
-    Future<void> quitterGroupe(int groupeId) async {
-      final db = await database;
-
-      final utilisateur = await getUtilisateurActuel();
-
-      // Vérifier si l'utilisateur est membre
-      final existe = await db.query(
-        'membres_groupes',
-        where: 'groupe_id = ? AND utilisateur_id = ?',
-        whereArgs: [
-          groupeId,
-          utilisateur.id,
-        ],
-      );
-
-      // S'il n'est pas membre
-      if (existe.isEmpty) {
-        return;
-      }
-
-      // Récupérer le rôle
-      final role = existe.first['role'] as String;
-
-      // Si l'utilisateur est administrateur
-      if (role == 'admin') {
-        final autresMembres = await getAutresMembres(groupeId);
-
-        // Il est le seul membre
-        if (autresMembres.isEmpty) {
-          throw Exception(
-            "L'administrateur est le seul membre du groupe.",
-          );
-        }
-
-        // Il doit transférer l'administration
-        throw Exception(
-          "L'administrateur doit choisir un nouveau responsable avant de quitter.",
-        );
-      }
-
-      // Si c'est un membre normal, il peut quitter
-      await db.delete(
-        'membres_groupes',
-        where: 'groupe_id = ? AND utilisateur_id = ?',
-        whereArgs: [
-          groupeId,
-          utilisateur.id,
-        ],
-      );
-
-      // Diminuer le nombre de membres
-      await db.rawUpdate(
-        '''
-    UPDATE groupes
-    SET nombreMembres = CASE
-      WHEN nombreMembres > 0 THEN nombreMembres - 1
-      ELSE 0
-    END
-    WHERE id = ?
-    ''',
-        [groupeId],
-      );
-    }
-
-
-    Future<void> transfererAdmin(
-        int groupeId,
-        int nouvelAdminId,
-        ) async {
-      final db = await database;
-
-      final utilisateurActuel = await getUtilisateurActuel();
-
-      // Vérifier que le nouvel admin est bien membre
-      final membre = await db.query(
-        'membres_groupes',
-        where: 'groupe_id = ? AND utilisateur_id = ?',
-        whereArgs: [
-          groupeId,
-          nouvelAdminId,
-        ],
-      );
-
-      if (membre.isEmpty) {
-        throw Exception(
-          "Cette personne n'est pas membre du groupe.",
-        );
-      }
-
-      // Retirer le rôle admin à l'ancien admin
-      await db.update(
-        'membres_groupes',
-        {
-          'role': 'membre',
-        },
-        where: 'groupe_id = ? AND utilisateur_id = ?',
-        whereArgs: [
-          groupeId,
-          utilisateurActuel.id,
-        ],
-      );
-
-      // Donner le rôle admin au nouveau responsable
-      await db.update(
-        'membres_groupes',
-        {
-          'role': 'admin',
-        },
-        where: 'groupe_id = ? AND utilisateur_id = ?',
-        whereArgs: [
-          groupeId,
-          nouvelAdminId,
-        ],
-      );
-    }
-
-
-    Future<int> insertUtilisateur(Utilisateur utilisateur) async {
-      final db = await database;
-
-      return await db.insert(
-        'utilisateurs',
-        {
-          'nom': utilisateur.nom,
-          'email': utilisateur.email,
-        },
-      );
-    }
-
-    Future<List<Utilisateur>> getUtilisateurs() async {
-      final db = await database;
-
-      final resultats = await db.query('utilisateurs');
-
-      return resultats.map((map) {
-        return Utilisateur(
-          id: map['id'] as int,
-          nom: map['nom'] as String,
-          email: map['email'] as String,
-        );
-      }).toList();
-    }
-
-    Future<Utilisateur> getUtilisateurActuel() async {
-      final db = await database;
-
-      if (utilisateurConnecteId != null) {
-        final resultats = await db.query(
-          'utilisateurs',
-          where: 'id = ?',
-          whereArgs: [utilisateurConnecteId],
-        );
-
-        if (resultats.isNotEmpty) {
-          final map = resultats.first;
-
-          return Utilisateur(
-            id: map['id'] as int,
-            nom: map['nom'] as String,
-            email: map['email'] as String,
-          );
-        }
-      }
-
-      final resultats = await db.query(
-        'utilisateurs',
-        limit: 1,
-      );
-
-      if (resultats.isNotEmpty) {
-        final map = resultats.first;
-
-        final utilisateur = Utilisateur(
-          id: map['id'] as int,
-          nom: map['nom'] as String,
-          email: map['email'] as String,
-        );
-        utilisateurConnecteId = utilisateur.id;
-
-        print("UTILISATEUR ACTUEL : id=${utilisateur.id}, nom=${utilisateur.nom}");
-
-        return utilisateur;
-      }
-
-      final id = await db.insert(
-        'utilisateurs',
-        {
-          'nom': 'Mirandy',
-          'email': 'mirandy@gmail.com',
-        },
-      );
-      utilisateurConnecteId = id;
-
-      print("NOUVEL UTILISATEUR CRÉÉ : id=$id");
-
-      return Utilisateur(
-        id: id,
-        nom: 'Mirandy',
-        email: 'mirandy@gmail.com',
-      );
-    }
-
-
-    Future<List<Utilisateur>> getMembresGroupe(int groupeId) async {
-      final db = await database;
-
-      final resultats = await db.rawQuery('''
-    SELECT utilisateurs.id, utilisateurs.nom, utilisateurs.email,
-           membres_groupes.role
-    FROM utilisateurs
-    INNER JOIN membres_groupes
-      ON utilisateurs.id = membres_groupes.utilisateur_id
-   WHERE membres_groupes.groupe_id = ?
-  AND membres_groupes.statut = 'accepte'
-''', [groupeId]);
-
-      print("RESULTAT MEMBRES : $resultats");
-
-      return resultats.map((map) {
-        return Utilisateur(
-          id: map['id'] as int,
-          nom: map['nom'] as String,
-          email: map['email'] as String,
-          role: map['role'] as String,
-        );
-      }).toList();
-    }
-
-    Future<void> afficherDonneesMembres(int groupeId) async {
-      final db = await database;
-
-      final resultats = await db.query(
-        'membres_groupes',
-        where: 'groupe_id = ?',
-        whereArgs: [groupeId],
-      );
-
-      print("MEMBRES DU GROUPE $groupeId : $resultats");
-    }
-    Future<void> reparerMembres() async {
-      final db = await database;
-
-      final utilisateur = await getUtilisateurActuel();
-
-      // Supprimer les anciennes associations invalides
-      await db.delete(
-        'membres_groupes',
-        where: 'utilisateur_id IS NULL',
-      );
-
-      // Vérifier dans quels groupes l'utilisateur est déjà membre
-      final groupes = await db.query('groupes');
-
-      for (final groupe in groupes) {
-        final groupeId = groupe['id'] as int;
-
-        final existe = await db.query(
-          'membres_groupes',
-          where: 'groupe_id = ? AND utilisateur_id = ?',
-          whereArgs: [groupeId, utilisateur.id],
-        );
-
-        if (existe.isEmpty) {
-          // Pour l'instant, on ne crée pas automatiquement
-          // un membre dans tous les groupes.
-          continue;
-        }
-
-        await db.update(
-          'groupes',
-          {
-            'nombreMembres': 1,
-          },
-          where: 'id = ?',
-          whereArgs: [groupeId],
-        );
-      }
-    }
-
-
-    Future<void> creerUtilisateursTest() async {
-      final db = await database;
-
-      final utilisateurs = [
-        {
-          'nom': 'Mirandy',
-          'email': 'mirandy@gmail.com',
-        },
-        {
-          'nom': 'Alice',
-          'email': 'alice@gmail.com',
-        },
-        {
-          'nom': 'Thomas',
-          'email': 'thomas@gmail.com',
-        },
-      ];
-
-      for (final utilisateur in utilisateurs) {
-        final existe = await db.query(
-          'utilisateurs',
-          where: 'email = ?',
-          whereArgs: [utilisateur['email']],
-        );
-
-        if (existe.isEmpty) {
-          await db.insert(
-            'utilisateurs',
-            utilisateur,
-          );
-        }
-      }
-    }
-
-
-    Future<void> changerUtilisateur(int utilisateurId) async {
-      utilisateurConnecteId = utilisateurId;
-
-      print("UTILISATEUR CONNECTÉ : $utilisateurConnecteId");
-    }
-
-
-
-    Future<String> getNomUtilisateurConnecte() async {
-      final db = await database;
-
-      final resultat = await db.query(
-        'utilisateurs',
-        where: 'id = ?',
-        whereArgs: [utilisateurConnecteId],
-        limit: 1,
-      );
-
-      if (resultat.isEmpty) {
-        return "Utilisateur";
-      }
-
-      return resultat.first['nom'].toString();
-    }
-
-
-
-    Future<List<Utilisateur>> getTousLesUtilisateurs() async {
-      final db = await database;
-
-      final resultats = await db.query('utilisateurs');
-
-      return resultats.map((map) {
-        return Utilisateur(
-          id: map['id'] as int,
-          nom: map['nom'] as String,
-          email: map['email'] as String,
-        );
-      }).toList();
-    }
-
-    Future<void> ajouterUtilisateurAuGroupe(
-        int utilisateurId,
-        int groupeId,
-        ) async {
-      final db = await database;
-
-      final existe = await db.query(
-        'membres_groupes',
-        where: 'utilisateur_id = ? AND groupe_id = ?',
-        whereArgs: [utilisateurId, groupeId],
-      );
-
-      if (existe.isEmpty) {
-        await db.insert(
-          'membres_groupes',
-          {
-            'utilisateur_id': utilisateurId,
-            'groupe_id': groupeId,
-            'role': 'membre',
-            'statut': 'accepte',
-          },
-        );
-
-        await db.rawUpdate(
-          '''
-      UPDATE groupes
-      SET nombreMembres = nombreMembres + 1
-      WHERE id = ?
-      ''',
-          [groupeId],
-        );
-      }
-    }
-
-
-    Future<void> retirerUtilisateurDuGroupe(
-        int utilisateurId,
-        int groupeId,
-        ) async {
-      final db = await database;
-
-      await db.delete(
-        'membres_groupes',
-        where: 'utilisateur_id = ? AND groupe_id = ?',
-        whereArgs: [
-          utilisateurId,
-          groupeId,
-        ],
-      );
-
-      // Mettre à jour le nombre de membres
-      final groupe = await db.query(
-        'groupes',
-        columns: ['nombreMembres'],
-        where: 'id = ?',
-        whereArgs: [groupeId],
-      );
-
-      if (groupe.isNotEmpty) {
-        final nombreActuel = groupe.first['nombreMembres'] as int;
-
-        if (nombreActuel > 0) {
-          await db.update(
-            'groupes',
-            {
-              'nombreMembres': nombreActuel - 1,
-            },
-            where: 'id = ?',
-            whereArgs: [groupeId],
-          );
-        }
-      }
-    }
-
-
-    Future<String> getRoleUtilisateur(int groupeId) async {
-      final db = await database;
-
-      final utilisateur = await getUtilisateurActuel();
-
-      final resultat = await db.query(
-        'membres_groupes',
-        columns: ['role'],
-        where: 'groupe_id = ? AND utilisateur_id = ?',
-        whereArgs: [
-          groupeId,
-          utilisateur.id,
-        ],
-      );
-
-      if (resultat.isNotEmpty) {
-        return resultat.first['role'] as String;
-      }
-
-      return 'membre';
-    }
-
-
-    Future<List<Utilisateur>> getAutresMembres(int groupeId) async {
-      final db = await database;
-
-      final utilisateur = await getUtilisateurActuel();
-
-      final resultat = await db.rawQuery('''
-    SELECT utilisateurs.*
-    FROM utilisateurs
-    INNER JOIN membres_groupes
-      ON utilisateurs.id = membres_groupes.utilisateur_id
-    WHERE membres_groupes.groupe_id = ?
-      AND membres_groupes.utilisateur_id != ?
-  ''', [
-        groupeId,
-        utilisateur.id,
-      ]);
-
-      return resultat.map((map) {
-        return Utilisateur(
-          id: map['id'] as int,
-          nom: map['nom'] as String,
-          email: map['email'] as String,
-        );
-      }).toList();
-    }
-
-
-    Future<String> getNomUtilisateurActuel() async {
-      final db = await database;
-
-      final result = await db.query(
-        'utilisateur_actuel',
-        limit: 1,
-      );
-
-      if (result.isEmpty) {
-        return "Moi";
-      }
-
-      return result.first['nom'].toString();
-    }
-
-    Future<void> ajouterLikePublication(
-        int publicationId,
-        int utilisateurId,
-        ) async {
-      final supabase = Supabase.instance.client;
-
-      await supabase.from('likes_publications').insert({
-        'publication_id': publicationId,
-        'utilisateur_id': utilisateurId,
-      });
-
-      print(
-        "✅ LIKE PUBLICATION AJOUTÉ : publication=$publicationId utilisateur=$utilisateurId",
-      );
-    }
-
-    Future<void> retirerLikePublication(
-        int publicationId,
-        int utilisateurId,
-        ) async {
-      final supabase = Supabase.instance.client;
-
-      await supabase
-          .from('likes_publications')
-          .delete()
-          .eq('publication_id', publicationId)
-          .eq('utilisateur_id', utilisateurId);
-
-      print(
-        "✅ LIKE PUBLICATION RETIRÉ : publication=$publicationId utilisateur=$utilisateurId",
-      );
-    }
-
-    Future<int> getNombreLikesPublication(int publicationId) async {
-      final supabase = Supabase.instance.client;
-
-      final resultat = await supabase
-          .from('likes_publications')
-          .select('id')
-          .eq('publication_id', publicationId);
-
-      return resultat.length;
-    }
-
-    Future<bool> aDejaAimePublication(
-        int publicationId,
-        int utilisateurId,
-        ) async {
-      final supabase = Supabase.instance.client;
-
-      final resultat = await supabase
-          .from('likes_publications')
-          .select('id')
-          .eq('publication_id', publicationId)
-          .eq('utilisateur_id', utilisateurId)
-          .limit(1);
-
-      return resultat.isNotEmpty;
-    }
-
-
-
+    print("🎉 DEMANDE ACCEPTÉE AVEC SUCCÈS");
+    print("======================================");
+  }
+
+
+
+// ============================================================
+// REFUSER UNE DEMANDE
+// ============================================================
+
+Future<void> refuserDemandeMembre(
+int groupeId,
+String email,
+) async {
+final profil = await supabase
+    .from('profiles')
+    .select('id')
+    .eq('email', email)
+    .single();
+
+final profileId =
+profil['id'] as String;
+
+await supabase
+    .from('membres_groupes')
+    .delete()
+    .eq('groupe_id', groupeId)
+    .eq('utilisateur_id', profileId)
+    .eq('statut', 'en_attente');
+
+print(
+"❌ Demande de $email refusée",
+);
+}
+
+// ============================================================
+// AJOUTER DIRECTEMENT UN UTILISATEUR
+// ============================================================
+
+Future<void> ajouterUtilisateurAuGroupe(
+String email,
+int groupeId,
+) async {
+final profil = await supabase
+    .from('profiles')
+    .select('id, nom, email')
+    .eq('email', email)
+    .single();
+
+final profileId =
+profil['id'] as String;
+
+final existantes = await supabase
+    .from('membres_groupes')
+    .select(
+'id, statut',
+)
+    .eq('groupe_id', groupeId)
+    .eq('utilisateur_id', profileId);
+
+if (existantes.isNotEmpty) {
+throw Exception(
+"Cet utilisateur est déjà membre ou possède déjà une demande.",
+);
+}
+
+await supabase.from('membres_groupes').insert({
+'groupe_id': groupeId,
+'utilisateur_id': profileId,
+'role': 'membre',
+'statut': 'accepte',
+});
+
+final nombreMembres =
+await getNombreMembresGroupe(groupeId);
+
+await supabase
+    .from('groupes')
+    .update({
+'nombreMembres': nombreMembres,
+})
+    .eq('id', groupeId);
+
+print(
+"✅ Utilisateur $email ajouté au groupe $groupeId",
+);
+}
+
+// ============================================================
+// RETIRER UN UTILISATEUR DU GROUPE
+// ============================================================
+
+Future<void> retirerUtilisateurDuGroupe(
+String email,
+int groupeId,
+) async {
+final profil = await supabase
+    .from('profiles')
+    .select('id')
+    .eq('email', email)
+    .single();
+
+final profileId =
+profil['id'] as String;
+
+await supabase
+    .from('membres_groupes')
+    .delete()
+    .eq('groupe_id', groupeId)
+    .eq('utilisateur_id', profileId);
+
+final nombreMembres =
+await getNombreMembresGroupe(groupeId);
+
+await supabase
+    .from('groupes')
+    .update({
+'nombreMembres': nombreMembres,
+})
+    .eq('id', groupeId);
+
+print(
+"✅ $email retiré du groupe $groupeId",
+);
+}
+
+// ============================================================
+// QUITTER UN GROUPE
+// ============================================================
+
+Future<void> quitterGroupe(
+int groupeId,
+) async {
+final profil =
+await getProfilUtilisateurActuel();
+
+final profileId =
+profil['id'] as String;
+
+final membre = await supabase
+    .from('membres_groupes')
+    .select('id, role, statut')
+    .eq('groupe_id', groupeId)
+    .eq('utilisateur_id', profileId)
+    .eq('statut', 'accepte')
+    .maybeSingle();
+
+if (membre == null) {
+throw Exception(
+"Vous n'êtes pas membre de ce groupe.",
+);
+}
+
+final role =
+membre['role'] as String? ?? 'membre';
+
+// L'administrateur ne peut pas quitter
+// tant qu'il n'a pas transféré son rôle.
+if (role == 'admin') {
+final autresMembres =
+await getAutresMembres(groupeId);
+
+if (autresMembres.isEmpty) {
+throw Exception(
+"Vous êtes le seul membre du groupe. "
+"Vous devez supprimer le groupe.",
+);
+}
+
+throw Exception(
+"Vous êtes administrateur. "
+"Vous devez nommer un nouveau responsable avant de quitter.",
+);
+}
+
+await supabase
+    .from('membres_groupes')
+    .delete()
+    .eq('groupe_id', groupeId)
+    .eq('utilisateur_id', profileId);
+
+final nombreMembres =
+await getNombreMembresGroupe(groupeId);
+
+await supabase
+    .from('groupes')
+    .update({
+'nombreMembres': nombreMembres,
+})
+    .eq('id', groupeId);
+
+print(
+"✅ ${profil['email']} a quitté le groupe $groupeId",
+);
+}
+
+// ============================================================
+// TRANSFÉRER ADMIN
+// ============================================================
+
+Future<void> transfererAdmin(
+int groupeId,
+String nouvelAdminEmail,
+) async {
+final profilActuel =
+await getProfilUtilisateurActuel();
+
+final ancienAdminId =
+profilActuel['id'] as String;
+
+// Vérifier que l'utilisateur actuel est admin.
+final ancienAdmin = await supabase
+    .from('membres_groupes')
+    .select('id, role, statut')
+    .eq('groupe_id', groupeId)
+    .eq('utilisateur_id', ancienAdminId)
+    .eq('statut', 'accepte')
+    .maybeSingle();
+
+if (ancienAdmin == null ||
+ancienAdmin['role'] != 'admin') {
+throw Exception(
+"Seul l'administrateur peut transférer le rôle.",
+);
+}
+
+final nouveauProfil = await supabase
+    .from('profiles')
+    .select('id')
+    .eq('email', nouvelAdminEmail)
+    .single();
+
+final nouvelAdminId =
+nouveauProfil['id'] as String;
+
+// Vérifier que le nouveau admin est membre.
+final membre = await supabase
+    .from('membres_groupes')
+    .select('id, role, statut')
+    .eq('groupe_id', groupeId)
+    .eq('utilisateur_id', nouvelAdminId)
+    .eq('statut', 'accepte')
+    .maybeSingle();
+
+if (membre == null) {
+throw Exception(
+"Cette personne n'est pas membre du groupe.",
+);
+}
+
+// Ancien admin devient membre.
+await supabase
+    .from('membres_groupes')
+    .update({
+'role': 'membre',
+})
+    .eq('id', ancienAdmin['id']);
+
+// Nouveau admin.
+await supabase
+    .from('membres_groupes')
+    .update({
+'role': 'admin',
+})
+    .eq('id', membre['id']);
+
+print(
+"✅ Administration transférée à $nouvelAdminEmail",
+);
+}
+
+// ============================================================
+// MODIFIER GROUPE
+// ============================================================
+
+Future<void> modifierGroupe(
+int groupeId,
+String nouveauNom,
+String nouvelleDescription,
+int nouveauNombreMembres,
+String nouveauType,
+) async {
+final profil =
+await getProfilUtilisateurActuel();
+
+final profileId =
+profil['id'] as String;
+
+final membre = await supabase
+    .from('membres_groupes')
+    .select('role, statut')
+    .eq('groupe_id', groupeId)
+    .eq('utilisateur_id', profileId)
+    .eq('statut', 'accepte')
+    .maybeSingle();
+
+if (membre == null ||
+membre['role'] != 'admin') {
+throw Exception(
+"Seul l'administrateur peut modifier ce groupe.",
+);
+}
+
+await supabase
+    .from('groupes')
+    .update({
+'nom': nouveauNom,
+'description': nouvelleDescription,
+'nombreMembres': nouveauNombreMembres,
+'type': nouveauType,
+})
+    .eq('id', groupeId);
+
+print(
+"✅ Groupe $groupeId modifié",
+);
+}
+
+// ============================================================
+// SUPPRIMER GROUPE
+// ============================================================
+
+Future<void> supprimerGroupe(
+int groupeId,
+) async {
+final profil =
+await getProfilUtilisateurActuel();
+
+final profileId =
+profil['id'] as String;
+
+final membre = await supabase
+    .from('membres_groupes')
+    .select('role, statut')
+    .eq('groupe_id', groupeId)
+    .eq('utilisateur_id', profileId)
+    .eq('statut', 'accepte')
+    .maybeSingle();
+
+if (membre == null ||
+membre['role'] != 'admin') {
+throw Exception(
+"Seul l'administrateur peut supprimer ce groupe.",
+);
+}
+
+// ----------------------------------------------------------
+// Publications du groupe
+// ----------------------------------------------------------
+
+final publications = await supabase
+    .from('publications')
+    .select('id')
+    .eq('groupe_id', groupeId);
+
+for (final publication in publications) {
+final publicationId =
+publication['id'] as int;
+
+// Images publication
+await supabase
+    .from('publication_images')
+    .delete()
+    .eq(
+'publication_id',
+publicationId,
+);
+
+// Likes publication
+await supabase
+    .from('likes_publications')
+    .delete()
+    .eq(
+'publication_id',
+publicationId,
+);
+
+// Commentaires
+final commentaires = await supabase
+    .from('commentaires')
+    .select('id')
+    .eq(
+'publication_id',
+publicationId,
+);
+
+for (final commentaire in commentaires) {
+final commentaireId =
+commentaire['id'] as int;
+
+await supabase
+    .from('likes_commentaires')
+    .delete()
+    .eq(
+'commentaire_id',
+commentaireId,
+);
+}
+
+await supabase
+    .from('commentaires')
+    .delete()
+    .eq(
+'publication_id',
+publicationId,
+);
+}
+
+// Supprimer publications
+await supabase
+    .from('publications')
+    .delete()
+    .eq(
+'groupe_id',
+groupeId,
+);
+
+// Membres
+await supabase
+    .from('membres_groupes')
+    .delete()
+    .eq(
+'groupe_id',
+groupeId,
+);
+
+// Groupe
+await supabase
+    .from('groupes')
+    .delete()
+    .eq(
+'id',
+groupeId,
+);
+
+print(
+"✅ Groupe $groupeId supprimé",
+);
+}
+
+// ============================================================
+// PUBLICATIONS
+// ============================================================
+
+Future<int> insertPublication(
+Publication publication,
+int groupeId,
+) async {
+final profil =
+await getProfilUtilisateurActuel();
+
+final profileId =
+profil['id'] as String;
+
+final result = await supabase
+    .from('publications')
+    .insert({
+'contenuMessage':
+publication.contenuMessage,
+'auteur': publication.auteur,
+'auteur_id': profileId,
+'datePublication':
+publication.datePublication
+    .toIso8601String(),
+'nombreLikes':
+publication.nombreLikes,
+'nombreCommentaires':
+publication.nombreCommentaires,
+'aime': publication.aime,
+'groupe_id': groupeId,
+'image': publication.images.isNotEmpty
+? publication.images.first
+    : null,
+})
+    .select('id')
+    .single();
+
+final publicationId =
+result['id'] as int;
+
+// Ajouter toutes les images.
+for (final image in publication.images) {
+await supabase
+    .from('publication_images')
+    .insert({
+'publication_id': publicationId,
+'image': image,
+});
+}
+
+print(
+"✅ Publication créée : $publicationId",
+);
+
+return publicationId;
+}
+
+// ------------------------------------------------------------
+// RÉCUPÉRER PUBLICATIONS
+// ------------------------------------------------------------
+
+Future<List<Publication>> getPublications(
+int groupeId,
+) async {
+final resultats = await supabase
+    .from('publications')
+    .select()
+    .eq('groupe_id', groupeId)
+    .order('id', ascending: false);
+
+final profil =
+await getProfilUtilisateurActuel();
+
+final utilisateurId =
+profil['id'] as String;
+
+final List<Publication> publications = [];
+
+for (final map in resultats) {
+final publicationId =
+map['id'] as int;
+
+// Images
+final resultatsImages = await supabase
+    .from('publication_images')
+    .select('image')
+    .eq(
+'publication_id',
+publicationId,
+)
+    .order('id', ascending: true);
+
+List<String> images = resultatsImages
+    .map<String>(
+(image) => image['image'] as String,
+)
+    .toList();
+
+// Compatibilité avec l'ancienne colonne image.
+if (images.isEmpty &&
+map['image'] != null) {
+images = [
+map['image'] as String,
+];
+}
+
+// Likes
+final likes = await supabase
+    .from('likes_publications')
+    .select('id, utilisateur_id')
+    .eq(
+'publication_id',
+publicationId,
+);
+
+final nombreLikes = likes.length;
+
+final aime = likes.any(
+(like) =>
+like['utilisateur_id'] ==
+utilisateurId,
+);
+
+publications.add(
+Publication(
+id: publicationId,
+contenuMessage:
+map['contenuMessage'] as String? ?? '',
+auteur:
+map['auteur'] as String? ?? 'Utilisateur',
+datePublication: DateTime.parse(
+map['datePublication'] as String,
+),
+nombreLikes: nombreLikes,
+nombreCommentaires:
+map['nombreCommentaires'] as int? ?? 0,
+aime: aime,
+images: images,
+),
+);
+}
+
+return publications;
+}
+
+// ============================================================
+// UPLOAD IMAGES PUBLICATION
+// ============================================================
+
+Future<String> uploadImagePublication(
+File image,
+) async {
+try {
+final nomFichier =
+'${DateTime.now().millisecondsSinceEpoch}_${image.path.split('/').last}';
+
+final chemin =
+'publications/$nomFichier';
+
+print(
+"📤 UPLOAD IMAGE : ${image.path}",
+);
+
+await supabase.storage
+    .from('publication-images')
+    .upload(
+chemin,
+image,
+fileOptions: const FileOptions(
+upsert: true,
+),
+);
+
+final url = supabase.storage
+    .from('publication-images')
+    .getPublicUrl(chemin);
+
+print(
+"✅ IMAGE UPLOADÉE : $url",
+);
+
+return url;
+} catch (e) {
+print(
+"❌ ERREUR UPLOAD IMAGE : $e",
+);
+rethrow;
+}
+}
+
+// ============================================================
+// LIKES PUBLICATIONS
+// ============================================================
+
+Future<void> ajouterLikePublication(
+int publicationId,
+String utilisateurId,
+) async {
+await supabase
+    .from('likes_publications')
+    .insert({
+'publication_id': publicationId,
+'utilisateur_id': utilisateurId,
+});
+
+print(
+"✅ LIKE PUBLICATION AJOUTÉ : "
+"publication=$publicationId "
+"utilisateur=$utilisateurId",
+);
+}
+
+Future<void> retirerLikePublication(
+int publicationId,
+String utilisateurId,
+) async {
+await supabase
+    .from('likes_publications')
+    .delete()
+    .eq(
+'publication_id',
+publicationId,
+)
+    .eq(
+'utilisateur_id',
+utilisateurId,
+);
+
+print(
+"✅ LIKE PUBLICATION RETIRÉ : "
+"publication=$publicationId "
+"utilisateur=$utilisateurId",
+);
+}
+
+Future<int> getNombreLikesPublication(
+int publicationId,
+) async {
+final resultat = await supabase
+    .from('likes_publications')
+    .select('id')
+    .eq(
+'publication_id',
+publicationId,
+);
+
+return resultat.length;
+}
+
+Future<bool> aDejaAimePublication(
+int publicationId,
+String utilisateurId,
+) async {
+final resultat = await supabase
+    .from('likes_publications')
+    .select('id')
+    .eq(
+'publication_id',
+publicationId,
+)
+    .eq(
+'utilisateur_id',
+utilisateurId,
+)
+    .limit(1);
+
+return resultat.isNotEmpty;
+}
+
+// ============================================================
+// COMMENTAIRES
+// ============================================================
+
+Future<int> insertCommentaire(
+Commentaire commentaire,
+) async {
+final profil =
+await getProfilUtilisateurActuel();
+
+final profileId =
+profil['id'] as String;
+
+final result = await supabase
+    .from('commentaires')
+    .insert({
+'texte': commentaire.texte,
+'auteur': commentaire.auteur,
+'auteur_id': profileId,
+'dateCommentaire':
+commentaire.dateCommentaire
+    .toIso8601String(),
+'publication_id':
+commentaire.publicationId,
+'parent_id': commentaire.parentId,
+})
+    .select('id')
+    .single();
+
+return result['id'] as int;
+}
+
+Future<List<Commentaire>> getCommentaires(
+int publicationId,
+) async {
+final resultats = await supabase
+    .from('commentaires')
+    .select()
+    .eq(
+'publication_id',
+publicationId,
+)
+    .order('id', ascending: true);
+
+final List<Commentaire> commentaires = [];
+
+for (final map in resultats) {
+final commentaireId =
+map['id'] as int;
+
+final likes = await supabase
+    .from('likes_commentaires')
+    .select('id')
+    .eq(
+'commentaire_id',
+commentaireId,
+);
+
+final nombreLikes = likes.length;
+
+commentaires.add(
+Commentaire(
+id: commentaireId,
+texte:
+map['texte'] as String? ?? '',
+auteur:
+map['auteur'] as String? ?? 'Utilisateur',
+dateCommentaire: DateTime.parse(
+map['dateCommentaire'] as String,
+),
+publicationId:
+map['publication_id'] as int,
+parentId:
+map['parent_id'] as int?,
+nombreLikes: nombreLikes,
+),
+);
+}
+
+return commentaires;
+}
+
+Future<int> getNombreCommentaires(
+int publicationId,
+) async {
+final result = await supabase
+    .from('commentaires')
+    .select('id')
+    .eq(
+'publication_id',
+publicationId,
+);
+
+return result.length;
+}
+
+Future<void> updateCommentaires(
+int publicationId,
+) async {
+final nombre =
+await getNombreCommentaires(
+publicationId,
+);
+
+await supabase
+    .from('publications')
+    .update({
+'nombreCommentaires': nombre,
+})
+    .eq(
+'id',
+publicationId,
+);
+
+print(
+"✅ Nombre de commentaires mis à jour : $nombre",
+);
+}
+
+// ============================================================
+// LIKES COMMENTAIRES
+// ============================================================
+
+Future<void> ajouterLikeCommentaire(
+int commentaireId,
+String utilisateurId,
+) async {
+await supabase
+    .from('likes_commentaires')
+    .insert({
+'commentaire_id': commentaireId,
+'utilisateur_id': utilisateurId,
+});
+
+print(
+"✅ LIKE COMMENTAIRE AJOUTÉ : "
+"commentaire=$commentaireId "
+"utilisateur=$utilisateurId",
+);
+}
+
+Future<void> retirerLikeCommentaire(
+int commentaireId,
+String utilisateurId,
+) async {
+await supabase
+    .from('likes_commentaires')
+    .delete()
+    .eq(
+'commentaire_id',
+commentaireId,
+)
+    .eq(
+'utilisateur_id',
+utilisateurId,
+);
+
+print(
+"✅ LIKE COMMENTAIRE RETIRÉ : "
+"commentaire=$commentaireId "
+"utilisateur=$utilisateurId",
+);
+}
+
+Future<bool> aDejaAimeCommentaire(
+int commentaireId,
+String utilisateurId,
+) async {
+final resultat = await supabase
+    .from('likes_commentaires')
+    .select('id')
+    .eq(
+'commentaire_id',
+commentaireId,
+)
+    .eq(
+'utilisateur_id',
+utilisateurId,
+)
+    .limit(1);
+
+return resultat.isNotEmpty;
+}
+
+Future<int> getNombreLikesCommentaire(
+int commentaireId,
+) async {
+final resultat = await supabase
+    .from('likes_commentaires')
+    .select('id')
+    .eq(
+'commentaire_id',
+commentaireId,
+);
+
+return resultat.length;
+}
+
+// ============================================================
+// MODIFIER COMMENTAIRE
+// ============================================================
+
+Future<void> modifierCommentaire(
+int commentaireId,
+String nouveauTexte,
+) async {
+await supabase
+    .from('commentaires')
+    .update({
+'texte': nouveauTexte,
+})
+    .eq(
+'id',
+commentaireId,
+);
+
+print(
+"✅ Commentaire $commentaireId modifié",
+);
+}
+
+// ============================================================
+// SUPPRIMER COMMENTAIRE
+// ============================================================
+
+Future<void> supprimerCommentaire(
+int commentaireId,
+) async {
+// Supprimer les likes associés.
+await supabase
+    .from('likes_commentaires')
+    .delete()
+    .eq(
+'commentaire_id',
+commentaireId,
+);
+
+// Supprimer les réponses associées.
+await supabase
+    .from('commentaires')
+    .delete()
+    .eq(
+'parent_id',
+commentaireId,
+);
+
+// Supprimer le commentaire.
+await supabase
+    .from('commentaires')
+    .delete()
+    .eq(
+'id',
+commentaireId,
+);
+
+print(
+"✅ Commentaire $commentaireId supprimé",
+);
+}
+
+// ============================================================
+// MODIFIER PUBLICATION
+// ============================================================
+
+Future<void> modifierPublication(
+int publicationId,
+String nouveauTexte,
+) async {
+await supabase
+    .from('publications')
+    .update({
+'contenuMessage': nouveauTexte,
+})
+    .eq(
+'id',
+publicationId,
+);
+
+print(
+"✅ Publication $publicationId modifiée",
+);
+}
+
+// ============================================================
+// SUPPRIMER PUBLICATION
+// ============================================================
+
+Future<void> supprimerPublication(
+int publicationId,
+) async {
+// Likes publication
+await supabase
+    .from('likes_publications')
+    .delete()
+    .eq(
+'publication_id',
+publicationId,
+);
+
+// Images publication
+await supabase
+    .from('publication_images')
+    .delete()
+    .eq(
+'publication_id',
+publicationId,
+);
+
+// Commentaires
+final commentaires = await supabase
+    .from('commentaires')
+    .select('id')
+    .eq(
+'publication_id',
+publicationId,
+);
+
+for (final commentaire in commentaires) {
+final commentaireId =
+commentaire['id'] as int;
+
+await supabase
+    .from('likes_commentaires')
+    .delete()
+    .eq(
+'commentaire_id',
+commentaireId,
+);
+}
+
+await supabase
+    .from('commentaires')
+    .delete()
+    .eq(
+'publication_id',
+publicationId,
+);
+
+// Publication
+await supabase
+    .from('publications')
+    .delete()
+    .eq(
+'id',
+publicationId,
+);
+
+print(
+"✅ Publication $publicationId supprimée",
+);
+}
 }
 

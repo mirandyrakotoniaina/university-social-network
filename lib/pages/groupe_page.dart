@@ -78,7 +78,8 @@ class _GroupePageState extends State<GroupePage> {
   Future<void> chargerCommentairesAimes(
       List<Commentaire> commentaires,
       ) async {
-    final utilisateurId = DatabaseHelper.utilisateurConnecteId;
+    final utilisateurId =
+    (await DatabaseHelper().getProfilUtilisateurActuel())['id'] as String?;
 
     if (utilisateurId == null) {
       return;
@@ -217,52 +218,65 @@ class _GroupePageState extends State<GroupePage> {
                             ),
                             onPressed: () async {
                               final commentaireId = commentaire.id!;
-                              final utilisateurId = DatabaseHelper.utilisateurConnecteId;
+
+                              final profil = await db.getProfilUtilisateurActuel();
+                              final utilisateurId = profil['id'] as String?;
+
                               print("ID UTILISATEUR POUR LIKE : $utilisateurId");
 
                               if (utilisateurId == null) {
                                 return;
                               }
 
-
                               final dejaAime = commentairesAimes.contains(commentaireId);
 
                               print("Commentaire ID : $commentaireId");
                               print("Déjà aimé : $dejaAime");
 
-
                               if (dejaAime) {
+                                // RETIRER LE LIKE
                                 await db.retirerLikeCommentaire(
                                   commentaireId,
                                   utilisateurId,
                                 );
 
-                                final totalLikes = await db.getNombreLikesCommentaire(
-                                  commentaireId,
-                                );
-                                print("TOTAL À AFFICHER : $totalLikes");
+                                final totalLikes =
+                                await db.getNombreLikesCommentaire(commentaireId);
+
+                                print("❤️ TOTAL APRÈS RETRAIT : $totalLikes");
+
+                                if (!mounted) return;
 
                                 setState(() {
-                                  commentairesAimes.add(commentaireId);
+                                  commentairesAimes.remove(commentaireId);
                                   commentaire.nombreLikes = totalLikes;
                                 });
-                                print("❤️ COMPTEUR DU COMMENTAIRE APRÈS SETSTATE : ${commentaire.nombreLikes}");
+
+                                print(
+                                  "❤️ COMPTEUR APRÈS RETRAIT : ${commentaire.nombreLikes}",
+                                );
                               } else {
+                                // AJOUTER LE LIKE
                                 await db.ajouterLikeCommentaire(
                                   commentaireId,
                                   utilisateurId,
                                 );
 
-                                final totalLikes = await db.getNombreLikesCommentaire(
-                                  commentaireId,
-                                );
+                                final totalLikes =
+                                await db.getNombreLikesCommentaire(commentaireId);
 
-                                print("❤️ TOTAL REÇU PAR FLUTTER : $totalLikes");
+                                print("❤️ TOTAL APRÈS AJOUT : $totalLikes");
+
+                                if (!mounted) return;
 
                                 setState(() {
                                   commentairesAimes.add(commentaireId);
                                   commentaire.nombreLikes = totalLikes;
                                 });
+
+                                print(
+                                  "❤️ COMPTEUR APRÈS AJOUT : ${commentaire.nombreLikes}",
+                                );
                               }
                             },
                           ),
@@ -472,9 +486,6 @@ class _GroupePageState extends State<GroupePage> {
                                     commentaire.id!,
                                   );
 
-                                  await db.supprimerCommentaire(
-                                    commentaire.id!,
-                                  );
 
                                   await db.updateCommentaires(publication.id!);
 
@@ -764,8 +775,8 @@ class _GroupePageState extends State<GroupePage> {
 
             if (estMembre)
               ElevatedButton.icon(
-                onPressed: () {
-                  Navigator.push(
+                onPressed: () async {
+                  final resultat = await Navigator.push(
                     context,
                     MaterialPageRoute(
                       builder: (context) => MembresPage(
@@ -774,6 +785,12 @@ class _GroupePageState extends State<GroupePage> {
                       ),
                     ),
                   );
+
+                  if (resultat != null && mounted) {
+                    setState(() {
+                      widget.groupe.nombreMembres = resultat;
+                    });
+                  }
                 },
                 icon: Icon(
                   roleUtilisateur == "admin"
@@ -786,18 +803,16 @@ class _GroupePageState extends State<GroupePage> {
                       : "Voir les membres",
                 ),
                 style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.green.shade700,
-                foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(
-                horizontal: 20,
-                vertical: 12,
+                  backgroundColor: Colors.green.shade700,
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 20,
+                    vertical: 12,
+                  ),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
                 ),
-                shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(12),
-
-
-               ),
-               ),
               ),
 
             const SizedBox(height: 15),
@@ -1132,17 +1147,46 @@ class _GroupePageState extends State<GroupePage> {
                                 child: ClipRRect(
                                   borderRadius: BorderRadius.circular(10),
                                   child: publication.images[imageIndex].startsWith('http')
-                                      ? Image.network(
-                                    publication.images[imageIndex],
-                                    width: 250,
-                                    height: 200,
-                                    fit: BoxFit.cover,
-                                    errorBuilder: (context, error, stackTrace) {
-                                      return const Icon(
-                                        Icons.broken_image,
-                                        size: 50,
+                                      ? GestureDetector(
+                                    onTap: () {
+                                      showDialog(
+                                        context: context,
+                                        barrierColor: Colors.black,
+                                        builder: (context) {
+                                          return Dialog(
+                                            backgroundColor: Colors.transparent,
+                                            insetPadding: EdgeInsets.zero,
+                                            child: InteractiveViewer(
+                                              minScale: 1,
+                                              maxScale: 4,
+                                              child: Image.network(
+                                                publication.images[imageIndex],
+                                                fit: BoxFit.contain,
+                                                errorBuilder: (context, error, stackTrace) {
+                                                  return const Icon(
+                                                    Icons.broken_image,
+                                                    color: Colors.white,
+                                                    size: 50,
+                                                  );
+                                                },
+                                              ),
+                                            ),
+                                          );
+                                        },
                                       );
                                     },
+                                    child: Image.network(
+                                      publication.images[imageIndex],
+                                      width: 250,
+                                      height: 200,
+                                      fit: BoxFit.cover,
+                                      errorBuilder: (context, error, stackTrace) {
+                                        return const Icon(
+                                          Icons.broken_image,
+                                          size: 50,
+                                        );
+                                      },
+                                    ),
                                   )
                                       : Image.file(
                                     File(publication.images[imageIndex]),
@@ -1164,40 +1208,58 @@ class _GroupePageState extends State<GroupePage> {
                             onPressed: () async {
                               final db = DatabaseHelper();
 
-                              final utilisateurId =
-                                  DatabaseHelper.utilisateurConnecteId;
+                              try {
+                                final profil = await db.getProfilUtilisateurActuel();
+                                final utilisateurId = profil['id'] as String?;
 
-                              if (utilisateurId == null) {
-                                return;
-                              }
+                                if (utilisateurId == null) {
+                                  return;
+                                }
 
-                              final dejaAime = await db.aDejaAimePublication(
-                                publication.id!,
-                                utilisateurId,
-                              );
-
-                              if (dejaAime) {
-                                await db.retirerLikePublication(
+                                final dejaAime = await db.aDejaAimePublication(
                                   publication.id!,
                                   utilisateurId,
                                 );
-                              } else {
-                                await db.ajouterLikePublication(
-                                  publication.id!,
-                                  utilisateurId,
+
+                                print("❤️ Publication : ${publication.id}");
+                                print("👤 Utilisateur : $utilisateurId");
+                                print("❤️ Déjà aimé : $dejaAime");
+
+                                if (dejaAime) {
+                                  await db.retirerLikePublication(
+                                    publication.id!,
+                                    utilisateurId,
+                                  );
+                                } else {
+                                  await db.ajouterLikePublication(
+                                    publication.id!,
+                                    utilisateurId,
+                                  );
+                                }
+
+                                final totalLikes =
+                                await db.getNombreLikesPublication(publication.id!);
+
+                                if (!mounted) return;
+
+                                setState(() {
+                                  publication.aime = !dejaAime;
+                                  publication.nombreLikes = totalLikes;
+                                });
+
+                                print("❤️ TOTAL LIKES : $totalLikes");
+                                print("❤️ AIME : ${publication.aime}");
+                              } catch (e) {
+                                print("❌ ERREUR LIKE PUBLICATION : $e");
+
+                                if (!mounted) return;
+
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(
+                                    content: Text("Erreur lors du like : $e"),
+                                  ),
                                 );
                               }
-
-                              final totalLikes = await db.getNombreLikesPublication(
-                                publication.id!,
-                              );
-
-                              setState(() {
-                                publication.aime = !dejaAime;
-                                publication.nombreLikes = totalLikes;
-                              });
-
-                              print("❤️ TOTAL LIKES PUBLICATION : $totalLikes");
                             },
                             icon: Icon(
                               publication.aime
