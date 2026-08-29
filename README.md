@@ -2,11 +2,11 @@
 
 ## Description
 
-University Social Network is a Flutter mobile application designed to manage groups or spaces related to university classes, activities, and clubs.
+**University Social Network** is a Flutter mobile application designed to manage groups or spaces related to university classes, activities, clubs, associations, and projects.
 
 The application allows students to discover groups, join communities, interact with members, and share content within their groups.
 
-Group administrators can manage groups, members, membership roles, publications, and interactions within their communities.
+Group administrators can manage groups, members, membership roles, publications, comments, and interactions within their communities.
 
 This project was developed as part of a university project based on the theme:
 
@@ -22,13 +22,14 @@ This project was developed as part of a university project based on the theme:
 * Choose the group type:
 
   * Class
-  * Activity
   * Club
   * Association
   * Project
+  * Custom types
 * Add a group description and image
 * Search for groups
 * Filter groups by type
+* Add new custom group types
 
 ### Member Management
 
@@ -60,19 +61,18 @@ This project was developed as part of a university project based on the theme:
 * Supabase
 * Supabase Database
 * Supabase Storage
-* SQLite / sqflite for local application data
 
 ## Database
 
-The application uses **Supabase** as the main backend database.
+The application uses **Supabase** as its main backend database.
 
-Supabase is used to store and synchronize groups, members, publications, comments, and likes.
+Supabase is used to store and synchronize groups, members, publications, comments, likes, and user-related data.
 
-### Main tables
+### Main Tables
 
 * `groupes` — stores group information
-* `utilisateurs` — stores local application users
 * `membres_groupes` — manages group members and roles
+* `types_espace` — stores available group/space types
 * `publications` — stores publications
 * `publication_images` — stores publication image URLs
 * `commentaires` — stores comments and replies
@@ -80,9 +80,9 @@ Supabase is used to store and synchronize groups, members, publications, comment
 * `likes_commentaires` — stores comment likes
 * `profiles` — stores user profiles used for Supabase references
 
-### Image Storage
+## Image Storage
 
-Publication images are stored in **Supabase Storage**.
+Publication images are stored using **Supabase Storage**.
 
 Storage bucket:
 
@@ -133,14 +133,12 @@ flutter pub get
 
 ### 4. Configure Supabase
 
-The application connects to the project's Supabase backend using:
+The application connects to the Supabase backend using:
 
 * Supabase API URL
 * Supabase Publishable Key
 
 These values are required to initialize Supabase in the Flutter application.
-
-The project uses the same Supabase project for the different application modules.
 
 **Do not use or expose the Supabase Secret Key in the Flutter application or in the Git repository.**
 
@@ -162,9 +160,9 @@ flutter run
 
 ## Backend
 
-The backend is shared between the different modules of the application.
+The application uses **Supabase** as its backend infrastructure.
 
-The group management module and the news feed module can use the same Supabase project and database.
+The different application modules can use the same Supabase project and database.
 
 ## Author
 
@@ -176,4 +174,4 @@ M1 Student — Data Engineering
 
 The project is functional and focuses on group and community management within a university social network.
 
-The main group, publication, comment, like, and image storage features are currently connected to Supabase.
+The main group management, membership, publication, comment, like, custom group type, and image storage features are integrated with Supabase.
